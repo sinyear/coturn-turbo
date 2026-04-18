@@ -31,7 +31,7 @@
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  */
-
+#define _GNU_SOURCE
 #include "apputils.h"
 #include "mainrelay.h"
 #include <errno.h>
@@ -44,6 +44,7 @@
 
 #include <pthread.h>
 #include <stdint.h>
+
 
 /* #define REQUEST_CLIENT_CERT */
 
