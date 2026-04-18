@@ -38,3 +38,8 @@ add_subdirectory(client)
 add_subdirectory(server)
 add_subdirectory(apps)
 
+# Add turbo extensions if enabled
+if(TURN_TURBO)
+    add_subdirectory(turbo)
+endif()
+

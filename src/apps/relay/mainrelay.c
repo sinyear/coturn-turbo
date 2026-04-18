@@ -38,6 +38,9 @@
 #include "dbdrivers/dbdriver.h"
 
 #include "prom_server.h"
+#if defined(TURN_TURBO)
+#include "turbo_api.h"
+#endif
 #include <assert.h>
 #include <limits.h>
 
@@ -243,7 +246,17 @@ turn_params_t turn_params = {
     false, /* drop_invalid_packets_log */
     false, /* udp_recvmmsg */
     false  /* include_reason_string */
+
+#if defined(TURN_TURBO)
+    ,false /* turbo_enabled */
+    ,0     /* turbo_api_port */
+#endif
 };
+
+#if defined(TURN_TURBO)
+struct turbo_netif *turbo_netif = NULL;
+struct turbo_room_mgr *turbo_room_mgr = NULL;
+#endif
 
 //////////////// OpenSSL Init //////////////////////
 
@@ -1035,6 +1048,12 @@ static char Usage[] =
     "						Useful in virtualized/containerized environments where\n"
     "						the system reports the host CPU count instead of\n"
     "						the allocated container CPUs.\n"
+    " --turbo				Enable TURBO extensions for high-performance SFU broadcasting.\n"
+    "						Requires DPDK or AF_XDP support to be compiled in.\n"
+#if defined(TURN_TURBO)
+    " --turbo-api-port		<port>		Port for the turbo room management HTTP API.\n"
+    "						Default is 0 (disabled).\n"
+#endif
     " --min-port			<port>		Lower bound of the UDP port range for relay endpoints "
     "allocation.\n"
     "						Default value is 49152, according to RFC 5766.\n"
@@ -1434,7 +1453,7 @@ static char AdminUsage[] =
     "					Setting to zero value means removal of the option.\n"
     "	-h, --help			Help\n";
 
-#define OPTIONS "c:d:p:L:E:X:i:m:l:r:u:b:B:e:M:J:N:O:q:Q:s:C:K:A:vVofhznaS"
+#define OPTIONS "c:d:p:L:E:X:i:m:l:r:u:b:B:e:M:J:N:O:q:Q:s:C:K:A:vVofhznaST"
 
 #define ADMIN_OPTIONS "PEgGORIHKYlLkaADSdb:e:M:J:N:u:r:p:s:X:o:h:x:v:f:"
 
@@ -1534,7 +1553,9 @@ enum EXTRA_OPTS {
   UDP_RECVMMSG_OPT,
   VERSION_OPT,
   CPUS_OPT,
-  INCLUDE_REASON_STRING_OPT
+  INCLUDE_REASON_STRING_OPT,
+  TURBO_OPT,
+  TURBO_API_PORT_OPT
 };
 
 struct myoption {
@@ -1686,6 +1707,10 @@ static const struct myoption long_options[] = {
     {"version", optional_argument, NULL, VERSION_OPT},
     {"syslog-facility", required_argument, NULL, SYSLOG_FACILITY_OPT},
     {"cpus", required_argument, NULL, CPUS_OPT},
+    {"turbo", optional_argument, NULL, TURBO_OPT},
+#if defined(TURN_TURBO)
+    {"turbo-api-port", required_argument, NULL, TURBO_API_PORT_OPT},
+#endif
     {NULL, no_argument, NULL, 0}};
 
 static const struct myoption admin_long_options[] = {
@@ -2496,6 +2521,19 @@ static void set_option(int c, char *value) {
   case 'n':
   case 'h':
     break;
+  case TURBO_OPT:
+#if defined(TURN_TURBO)
+    turn_params.turbo_enabled = get_bool_value(value);
+#else
+    TURN_LOG_FUNC(TURN_LOG_LEVEL_ERROR, "TURBO support not compiled in\n");
+    exit(-1);
+#endif
+    break;
+#if defined(TURN_TURBO)
+  case TURBO_API_PORT_OPT:
+    turn_params.turbo_api_port = (uint16_t)atoi(value);
+    break;
+#endif
   default:
     fprintf(stderr, "\n%s\n", Usage);
     exit(-1);
@@ -3433,7 +3471,48 @@ int main(int argc, char **argv) {
   drop_privileges();
   start_prometheus_server();
 
+#if defined(TURN_TURBO)
+  // Initialize turbo components
+  if (turn_params.turbo_enabled) {
+    TURN_LOG_FUNC(TURN_LOG_LEVEL_INFO, "Initializing TURBO components...\n");
+
+    // Initialize network backend
+    turbo_netif = turbo_netif_init("", turn_params.listener_port);
+    if (!turbo_netif) {
+      TURN_LOG_FUNC(TURN_LOG_LEVEL_ERROR, "Failed to initialize turbo network interface\n");
+      exit(-1);
+    }
+
+    // Initialize room manager
+    turbo_room_mgr = turbo_room_mgr_create(turbo_netif, 1024, 10000);
+    if (!turbo_room_mgr) {
+      TURN_LOG_FUNC(TURN_LOG_LEVEL_ERROR, "Failed to initialize turbo room manager\n");
+      exit(-1);
+    }
+
+    // Start room management HTTP API server
+    if (turn_params.turbo_api_port > 0) {
+      turbo_api_start(turn_params.turbo_api_port);
+    }
+
+    TURN_LOG_FUNC(TURN_LOG_LEVEL_INFO, "TURBO components initialized successfully\n");
+  }
+#endif
+
   run_listener_server(&(turn_params.listener));
+
+#if defined(TURN_TURBO)
+  /* Cleanup turbo components */
+  turbo_api_stop();
+  if (turbo_room_mgr) {
+    turbo_room_mgr_destroy(turbo_room_mgr);
+    turbo_room_mgr = NULL;
+  }
+  if (turbo_netif) {
+    turbo_netif_cleanup(turbo_netif);
+    turbo_netif = NULL;
+  }
+#endif
 
   disconnect_database();
 

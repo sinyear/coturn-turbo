@@ -1,0 +1,11 @@
+{
+  "hooks": {
+    "PostBuild": [
+      {
+        "type": "prompt",
+        "prompt": "分析构建日志，如果有错误请总结并提供修复建议",
+        "timeout": 60
+      }
+    ]
+  }
+}
