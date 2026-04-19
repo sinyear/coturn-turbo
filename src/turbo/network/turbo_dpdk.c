@@ -22,7 +22,7 @@ static inline struct rte_mbuf* pkt_to_mbuf(struct turbo_packet *pkt) {
 }
 
 /* Convert rte_mbuf to turbo_packet */
-static inline struct turbo_packet* mbuf_to_pkt(struct rte_mbuf *mbuf) {
+struct turbo_packet* mbuf_to_pkt(struct rte_mbuf *mbuf) {
     struct turbo_packet *pkt = malloc(sizeof(struct turbo_packet));
     if (!pkt) return NULL;
 
@@ -85,13 +85,21 @@ static int turbo_dpdk_init(struct turbo_netif *netif, const char *ifname, uint16
         return -ENOMEM;
     }
 
-    /* Configure port */
+    /* Configure port with hardware checksum offload */
     rte_eth_dev_info_get(priv->port_id, &dev_info);
     priv->nb_rx_queues = 1;
     priv->nb_tx_queues = 1;
 
     port_conf.rxmode.mq_mode = RTE_ETH_MQ_RX_NONE;
     port_conf.txmode.mq_mode = RTE_ETH_MQ_TX_NONE;
+
+    /* Enable hardware checksum offload if supported */
+    if (dev_info.tx_offload_capa & RTE_ETH_TX_OFFLOAD_IPV4_CKSUM) {
+        port_conf.txmode.offloads |= RTE_ETH_TX_OFFLOAD_IPV4_CKSUM;
+    }
+    if (dev_info.tx_offload_capa & RTE_ETH_TX_OFFLOAD_UDP_CKSUM) {
+        port_conf.txmode.offloads |= RTE_ETH_TX_OFFLOAD_UDP_CKSUM;
+    }
 
     ret = rte_eth_dev_configure(priv->port_id, priv->nb_rx_queues,
                                priv->nb_tx_queues, &port_conf);
@@ -145,11 +153,14 @@ static void turbo_dpdk_cleanup(struct turbo_netif *netif) {
     struct turbo_dpdk_priv *priv = netif->priv;
 
     if (priv) {
+        netif->priv = NULL;  /* Prevent double-cleanup */
         if (priv->port_id < RTE_MAX_ETHPORTS) {
             rte_eth_dev_stop(priv->port_id);
+            priv->port_id = RTE_MAX_ETHPORTS;
         }
         if (priv->mbuf_pool) {
             rte_mempool_free(priv->mbuf_pool);
+            priv->mbuf_pool = NULL;
         }
         free(priv);
     }
@@ -182,8 +193,8 @@ static uint16_t turbo_dpdk_tx_burst(struct turbo_netif *netif, struct turbo_pack
 
     for (uint16_t i = 0; i < nb_pkts; i++) {
         mbufs[i] = pkt_to_mbuf(pkts[i]);
-        rte_pktmbuf_data_len(mbufs[i]) = pkts[i]->len;
-        rte_pktmbuf_pkt_len(mbufs[i]) = pkts[i]->len;
+        mbufs[i]->data_len = (uint16_t)pkts[i]->len;
+        mbufs[i]->pkt_len = (uint32_t)pkts[i]->len;
     }
 
     return rte_eth_tx_burst(priv->port_id, 0, mbufs, nb_pkts);

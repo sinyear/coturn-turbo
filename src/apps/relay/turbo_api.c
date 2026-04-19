@@ -20,12 +20,18 @@
 #include <event2/keyvalq_struct.h>
 #include <json-c/json.h>
 #include <string.h>
+#include <stdatomic.h>
 #include <arpa/inet.h>
+#include "../../turbo/utils/turbo_json.h"
+
+#ifdef TURN_USE_DPDK
+#include <rte_hash.h>
+#endif
 
 static struct evhttp *turbo_http_server = NULL;
 static struct event_base *turbo_event_base = NULL;
 static pthread_t turbo_api_thread;
-static int turbo_api_running = 0;
+static atomic_int turbo_api_running = 0;
 
 /* Helper: send JSON response */
 static void send_json_response(struct evhttp_request *req, int code, struct json_object *obj) {
@@ -115,10 +121,8 @@ static void turbo_api_room_join(struct evhttp_request *req, void *arg) {
 
     struct json_object *jroom_id = json_object_object_get(body, "room_id");
     struct json_object *jmember_id = json_object_object_get(body, "member_id");
-    struct json_object *jip = json_object_object_get(body, "ip");
-    struct json_object *jport = json_object_object_get(body, "port");
 
-    if (!jroom_id || !jmember_id || !jip || !jport) {
+    if (!jroom_id || !jmember_id) {
         json_object_put(body);
         send_json_response(req, 400, NULL);
         return;
@@ -126,18 +130,14 @@ static void turbo_api_room_join(struct evhttp_request *req, void *arg) {
 
     uint32_t room_id = (uint32_t)json_object_get_int(jroom_id);
     uint32_t member_id = (uint32_t)json_object_get_int(jmember_id);
-    const char *ip = json_object_get_string(jip);
-    uint16_t port = (uint16_t)json_object_get_int(jport);
 
     struct sockaddr_in addr;
-    memset(&addr, 0, sizeof(addr));
-    addr.sin_family = AF_INET;
-    addr.sin_port = htons(port);
-    if (inet_pton(AF_INET, ip, &addr.sin_addr) != 1) {
+    if (turbo_json_parse_addr(body, &addr) != 0) {
         json_object_put(body);
         send_json_response(req, 400, NULL);
         return;
     }
+    uint16_t port = ntohs(addr.sin_port);
 
     int ret = turbo_room_add_member(turbo_room_mgr, room_id, member_id, &addr, port);
 
@@ -271,8 +271,25 @@ static void turbo_api_room_list(struct evhttp_request *req, void *arg) {
 
     struct json_object *rooms = json_object_new_array();
 
-    /* Iterate through hash buckets */
-#ifndef TURN_USE_DPDK
+    /* Iterate through rooms */
+#ifdef TURN_USE_DPDK
+    /* DPDK: iterate hash table with rte_hash_iterate */
+    if (turbo_room_mgr && turbo_room_mgr->room_hash) {
+        const void *key;
+        void *data;
+        uint32_t next = 0;
+        int32_t idx;
+        while ((idx = rte_hash_iterate(turbo_room_mgr->room_hash, &key, &data, &next)) >= 0) {
+            struct turbo_room *room = (struct turbo_room *)data;
+            if (!room->marked_for_delete) {
+                struct json_object *r = json_object_new_object();
+                json_object_object_add(r, "room_id", json_object_new_int(room->room_id));
+                json_object_object_add(r, "member_count", json_object_new_int(room->member_count));
+                json_object_array_add(rooms, r);
+            }
+        }
+    }
+#else
     for (uint32_t i = 0; i < turbo_room_mgr->room_hash.num_buckets; i++) {
         struct turbo_room *room = turbo_room_mgr->room_hash.buckets[i];
         while (room) {
@@ -288,6 +305,7 @@ static void turbo_api_room_list(struct evhttp_request *req, void *arg) {
 #endif
 
     json_object_object_add(resp, "rooms", rooms);
+    json_object_object_add(resp, "total", json_object_new_int(json_object_array_length(rooms)));
     send_json_response(req, 200, resp);
     json_object_put(resp);
 }
@@ -322,12 +340,12 @@ static void* turbo_api_thread_func(void *arg) {
         return NULL;
     }
 
-    turbo_api_running = 1;
+    atomic_store(&turbo_api_running, 1);
     TURN_LOG_FUNC(TURN_LOG_LEVEL_INFO, "turbo api: server started on port %u\n", port);
 
     event_base_dispatch(turbo_event_base);
 
-    turbo_api_running = 0;
+    atomic_store(&turbo_api_running, 0);
     evhttp_free(turbo_http_server);
     event_base_free(turbo_event_base);
     turbo_http_server = NULL;
@@ -352,7 +370,7 @@ int turbo_api_start(uint16_t port) {
 }
 
 void turbo_api_stop(void) {
-    if (turbo_api_running && turbo_event_base) {
+    if (atomic_load(&turbo_api_running) && turbo_event_base) {
         event_base_loopexit(turbo_event_base, NULL);
     }
 }

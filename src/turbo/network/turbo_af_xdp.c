@@ -129,14 +129,18 @@ static void turbo_afxdp_cleanup(struct turbo_netif *netif) {
     struct turbo_afxdp_priv *priv = netif->priv;
 
     if (priv) {
+        netif->priv = NULL;  /* Prevent double-cleanup */
         if (priv->xsk) {
             xsk_socket__delete(priv->xsk);
+            priv->xsk = NULL;
         }
         if (priv->umem) {
             xsk_umem__delete(priv->umem);
+            priv->umem = NULL;
         }
         if (priv->umem_area) {
             free(priv->umem_area);
+            priv->umem_area = NULL;
         }
         free(priv);
     }

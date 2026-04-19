@@ -33,6 +33,7 @@
 ##
 
 add_subdirectory(common)
+add_subdirectory(conductor)
 add_subdirectory(natdiscovery)
 add_subdirectory(oauth)
 add_subdirectory(peer)

@@ -8,5 +8,7 @@ add_subdirectory(network)
 # Add forward library
 add_subdirectory(forward)
 
-# Add other turbo components here as they are implemented
-# add_subdirectory(utils)
+# Add utils library
+if(TURN_TURBO)
+    add_subdirectory(utils)
+endif()

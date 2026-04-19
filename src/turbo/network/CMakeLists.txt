@@ -31,6 +31,10 @@ endif()
 set(TURBO_NETWORK_SOURCES
     turbo_netif.h
     turbo_netif.c
+    turbo_port.h
+    turbo_port.c
+    turbo_mempool.h
+    turbo_mempool.c
 )
 
 # Add backend-specific sources
@@ -65,3 +69,27 @@ endif()
 
 # Include directories
 target_include_directories(turbo_network PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+
+# XDP BPF program compilation (AF_XDP backend only)
+if(TURN_USE_AFXDP)
+    # Find clang for BPF compilation
+    find_program(CLANG clang)
+    if(CLANG)
+        set(XDP_PROG_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/xdp_prog.c)
+        set(XDP_PROG_OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/xdp_prog.o)
+
+        add_custom_command(
+            OUTPUT ${XDP_PROG_OUTPUT}
+            COMMAND ${CLANG} -O2 -target bpf -c
+                    ${XDP_PROG_SOURCE}
+                    -o ${XDP_PROG_OUTPUT}
+            DEPENDS ${XDP_PROG_SOURCE}
+            COMMENT "Compiling XDP BPF program"
+            VERBATIM
+        )
+        add_custom_target(xdp_prog ALL DEPENDS ${XDP_PROG_OUTPUT})
+        install(FILES ${XDP_PROG_OUTPUT} DESTINATION share/turnserver OPTIONAL)
+    else()
+        message(WARNING "clang not found - XDP BPF program will not be compiled")
+    endif()
+endif()

@@ -6,6 +6,10 @@
 set(TURBO_FORWARD_SOURCES
     turbo_room.h
     turbo_room.c
+    turbo_switch.h
+    turbo_switch.c
+    turbo_fec.h
+    turbo_fec.c
 )
 
 # Create static library

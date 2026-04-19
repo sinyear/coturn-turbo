@@ -5,6 +5,7 @@
 #include <stddef.h>
 #include <netinet/in.h>
 #include "../network/turbo_netif.h"
+#include "../network/turbo_port.h"
 
 #ifdef TURN_USE_DPDK
 #include <rte_hash.h>

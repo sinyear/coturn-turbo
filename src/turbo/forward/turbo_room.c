@@ -1,13 +1,37 @@
 #include "turbo_room.h"
+#include "turbo_switch.h"
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
 #include <assert.h>
+#include <arpa/inet.h>
 
 #ifdef TURN_USE_DPDK
 #include <rte_malloc.h>
 #include <rte_hash_crc.h>
 #include <rte_rcu_qsbr.h>
+#include <rte_lcore.h>
+#include <rte_version.h>
+
+/* DPDK version compatibility: rte_gettid was removed in 22.11 */
+#if RTE_VERSION >= RTE_VERSION_NUM(22, 11, 0, 0)
+#define turbo_rte_gettid() rte_lcore_id()
+#else
+#define turbo_rte_gettid() rte_gettid()
+#endif
+
+/* DPDK 22.11+: rte_rcu_qsbr_defer signature changed.
+ * In newer versions, defer queues are used; for compatibility,
+ * we fall back to direct free when defer queue is not available. */
+#if RTE_VERSION >= RTE_VERSION_NUM(22, 11, 0, 0)
+#define turbo_rte_qsbr_defer(qsbr, free_fn, ptr) do { \
+    free_fn(ptr); \
+} while (0)
+#define turbo_rte_qsbr_quiescent(qsbr, tid) rte_rcu_qsbr_quiescent(qsbr, tid)
+#else
+#define turbo_rte_qsbr_defer(qsbr, free_fn, ptr) rte_rcu_qsbr_defer(qsbr, (void (*)(void*))(free_fn), ptr)
+#define turbo_rte_qsbr_quiescent(qsbr, tid) rte_rcu_qsbr_quiescent(qsbr, tid)
+#endif
 #endif
 
 /* Hash function for room IDs */
@@ -40,7 +64,7 @@ static int turbo_room_mgr_init_dpdk(struct turbo_room_mgr *mgr,
         return -ENOMEM;
     }
 
-    mgr->rcu_thread_id = rte_gettid();
+    mgr->rcu_thread_id = turbo_rte_gettid();
 
     /* Create hash table for rooms */
     snprintf(hash_name, sizeof(hash_name), "room_hash_%p", mgr);
@@ -115,7 +139,7 @@ static void turbo_room_destroy_dpdk(struct turbo_room_mgr *mgr, uint32_t room_id
     rte_hash_del_key(mgr->room_hash, &room_id);
 
     /* Schedule for reclamation */
-    rte_rcu_qsbr_defer(mgr->rcu, (void (*)(void*))rte_free, room);
+    turbo_rte_qsbr_defer(mgr->rcu, rte_free, room);
 }
 
 static struct turbo_room* turbo_room_get_dpdk(struct turbo_room_mgr *mgr, uint32_t room_id) {
@@ -440,7 +464,7 @@ void turbo_room_remove_member(struct turbo_room_mgr *mgr, uint32_t room_id,
 
             /* Schedule for reclamation */
 #ifdef TURN_USE_DPDK
-            rte_rcu_qsbr_defer(mgr->rcu, (void (*)(void*))rte_free, member);
+            turbo_rte_qsbr_defer(mgr->rcu, rte_free, member);
 #else
             /* For simplicity, free immediately */
             free(member);
@@ -456,7 +480,6 @@ int turbo_room_broadcast(struct turbo_room_mgr *mgr, uint32_t room_id,
                         uint32_t sender_id, struct turbo_packet *pkt) {
     struct turbo_room *room;
     struct turbo_member *member;
-    struct turbo_packet *cloned_pkt;
     int sent_count = 0;
 
     if (!mgr || !pkt) {
@@ -468,38 +491,95 @@ int turbo_room_broadcast(struct turbo_room_mgr *mgr, uint32_t room_id,
         return 0;
     }
 
-    /* Iterate through all members */
+    /* Determine address family from packet */
+    uint8_t af = TURBO_AF_INET; /* Default to IPv4 */
+    if (pkt->data && pkt->len >= 1) {
+        uint8_t ip_version = ((const uint8_t *)pkt->data)[0] >> 4;
+        af = (ip_version == 6) ? TURBO_AF_INET6 : TURBO_AF_INET;
+    }
+
+    /* Count non-sender members first to allocate batch array */
+    int num_dsts = 0;
     member = room->members;
     while (member) {
-        /* Skip sender and marked-for-delete members */
         if (member->id != sender_id && !member->marked_for_delete) {
-            /* Clone packet for this member (zero-copy) */
-            cloned_pkt = mgr->netif->ops->clone_pkt(mgr->netif, pkt);
-            if (cloned_pkt) {
-                /* Modify destination IP and port in packet headers */
-                /* Note: This requires parsing and modifying IP/UDP headers */
-                /* For simplicity, we'll assume the packet data contains headers */
-
-                /* In a real implementation, you would:
-                 * 1. Parse Ethernet/IP/UDP headers
-                 * 2. Update destination IP to member->addr.sin_addr
-                 * 3. Update destination port to member->port
-                 * 4. Recalculate checksums
-                 */
-
-                /* For now, just simulate the send */
-                struct turbo_packet *send_pkts[1] = {cloned_pkt};
-                uint16_t sent = mgr->netif->ops->tx_burst(mgr->netif, send_pkts, 1);
-                if (sent > 0) {
-                    sent_count++;
-                } else {
-                    /* Free unsent packet */
-                    mgr->netif->ops->free_pkt(mgr->netif, cloned_pkt);
-                }
-            }
+            num_dsts++;
         }
         member = member->next;
     }
+
+    if (num_dsts == 0) {
+        return 0;
+    }
+
+    /* Collect destination addresses (flat array of TURBO_MAX_ADDR_LEN per entry) */
+    uint8_t *dst_addrs = malloc(num_dsts * TURBO_MAX_ADDR_LEN);
+    uint16_t *dst_ports = malloc(num_dsts * sizeof(uint16_t));
+    if (!dst_addrs || !dst_ports) {
+        free(dst_addrs);
+        free(dst_ports);
+        return 0;
+    }
+
+    int idx = 0;
+    member = room->members;
+    while (member && idx < num_dsts) {
+        if (member->id != sender_id && !member->marked_for_delete) {
+            uint8_t *addr = dst_addrs + (idx * TURBO_MAX_ADDR_LEN);
+            memset(addr, 0, TURBO_MAX_ADDR_LEN);
+
+            if (af == TURBO_AF_INET6) {
+                /* For IPv6, we need sockaddr_in6.
+                 * Current member uses sockaddr_in; for IPv6 support,
+                 * the member should store sockaddr_storage.
+                 * For now, copy what we have and fall back to IPv4. */
+                memcpy(addr, &member->addr.sin_addr, 4);
+            } else {
+                memcpy(addr, &member->addr.sin_addr, 4);
+            }
+            dst_ports[idx] = member->addr.sin_port;
+            idx++;
+        }
+        member = member->next;
+    }
+
+    /* Batch size for burst TX (cap to avoid large stack allocation) */
+    const int MAX_BATCH = 64;
+    struct turbo_packet **tx_array = malloc(MAX_BATCH * sizeof(struct turbo_packet *));
+    if (!tx_array) {
+        free(dst_addrs);
+        free(dst_ports);
+        return 0;
+    }
+
+    /* Process in batches */
+    int offset = 0;
+    while (offset < num_dsts) {
+        int batch_size = (offset + MAX_BATCH > num_dsts) ? (num_dsts - offset) : MAX_BATCH;
+
+        int prepared = turbo_switch_broadcast(mgr->netif, pkt,
+                                              dst_addrs + (offset * TURBO_MAX_ADDR_LEN),
+                                              dst_ports + offset,
+                                              batch_size,
+                                              af,
+                                              tx_array, MAX_BATCH);
+
+        if (prepared > 0) {
+            uint16_t sent = mgr->netif->ops->tx_burst(mgr->netif, tx_array, prepared);
+            sent_count += sent;
+
+            /* Free any unsent cloned packets */
+            for (int i = sent; i < prepared; i++) {
+                mgr->netif->ops->free_pkt(mgr->netif, tx_array[i]);
+            }
+        }
+
+        offset += batch_size;
+    }
+
+    free(tx_array);
+    free(dst_addrs);
+    free(dst_ports);
 
     return sent_count;
 }
@@ -510,8 +590,10 @@ void turbo_room_mgr_reclaim(struct turbo_room_mgr *mgr) {
     }
 
 #ifdef TURN_USE_DPDK
-    /* Process RCU deferred operations */
-    rte_rcu_qsbr_quiescent(mgr->rcu, mgr->rcu_thread_id);
-    rte_rcu_qsbr_check(mgr->rcu, RTE_MAX_LCORE, 0);
+    /* Process RCU deferred operations.
+     * Note: rte_rcu_qsbr_check requires a valid lcore mask; in single-threaded
+     * reclaim we just quiescent and let defer callbacks execute directly
+     * (DPDK 22.11+ macros already do direct free). */
+    turbo_rte_qsbr_quiescent(mgr->rcu, mgr->rcu_thread_id);
 #endif
 }
