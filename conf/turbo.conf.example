@@ -1,7 +1,7 @@
 # ============================================================
-# coturn-turbo 配置示例
+# coturn-turbo 配置示例（Turbo 高性能模式）
 # ============================================================
-# 将此文件复制为 turnserver.conf 并根据实际环境修改参数
+# 本配置用于 Turbo 模式构建（编译时 CFLAGS 包含 -DTURN_USE_DPDK 或 -DTURN_USE_AFXDP）
 #
 # 使用方式:
 #   turnserver -c turnserver.conf
@@ -21,14 +21,14 @@ listening-port=3478
 # TLS 监听端口（可选）
 #tls-listening-port=5349
 
-# 外部 IP 地址（如果使用 NAT）
-#external-ip=203.0.113.10
-
 # 监听地址
 listening-ip=0.0.0.0
 
 # Relay 地址
 relay-ip=0.0.0.0
+
+# 外部 IP 地址（如果使用 NAT）
+#external-ip=203.0.113.10
 
 # Realm（认证域）
 realm=north
@@ -42,36 +42,33 @@ user=claude:password
 # 日志级别 (0-7, 7 为最详细)
 verbose
 
-# 最小/最大中继端口范围
+# 最小/最大中继端口范围（Turbo 模式下单端口复用，此范围仅用于回退场景）
 #min-port=49152
 #max-port=65535
 
+# 网络接口名称（Turbo 模式必填，复用标准 listening-device 参数）:
+#   DPDK 模式: DPDK 端口 ID 或 PCI 地址（如 "0" 或 "0000:03:00.0"）
+#   AF_XDP 模式: Linux 网络接口名（如 "eth0"、"ens3"）
+# 对应命令行参数: -d/--listening-device
+listening-device=eth0
+
 # -----------------------------------------------------------
-# Turbo 高性能模式配置
+# Turbo 高性能模式配置（核心）
 # -----------------------------------------------------------
 
 # 启用 Turbo 模式（DPDK/AF_XDP 数据平面加速）
+# 注意：必须在编译时包含 -DTURN_USE_DPDK 或 -DTURN_USE_AFXDP
+# 标准模式（无 Turbo 编译）设置 turbo=true 会导致启动失败
 turbo=true
 
 # Turbo HTTP API 端口（房间管理 REST API）
+# 提供以下接口:
+#   POST   /v1/room/create  - 创建房间
+#   POST   /v1/room/join    - 加入房间
+#   DELETE /v1/room/leave   - 离开房间
+#   GET    /v1/room/info    - 查询房间信息
+#   GET    /v1/room/list    - 列出所有房间
 turbo-api-port=9999
-
-# 网络后端选择:
-#   dpdk   - 使用 DPDK 网络后端（需 --use-dpdk 编译）
-#   afxdp  - 使用 AF_XDP 网络后端（需 --use-afxdp 编译）
-# 注意: 后端在编译时确定，此处仅作注释说明
-# turbo-backend=dpdk
-
-# 网络接口名称:
-#   DPDK 模式: DPDK 端口标识，如 "0000:03:00.0" 或 "0"
-#   AF_XDP 模式: Linux 网络接口名，如 "eth0"
-# turbo-ifname=eth0
-
-# 最大房间数
-# turbo-max-rooms=1024
-
-# 每个房间最大成员数
-# turbo-max-members-per-room=256
 
 # -----------------------------------------------------------
 # SSL/TLS 配置（可选）
@@ -91,22 +88,25 @@ turbo-api-port=9999
 # -----------------------------------------------------------
 
 # SQLite（默认）
-#userdb=/var/lib/turnserver/turndb
+#userdb=/var/lib/turn/turndb
 
 # MySQL
-#psql-userdb=host=localhost dbname=turn user=turn password=turn
+#mysql-userdb="host=localhost dbname=turn user=turn password=turn"
 
 # PostgreSQL
-#psql-userdb=host=localhost dbname=turn user=turn password=turn connect_timeout=30
+#psql-userdb="host=localhost dbname=turn user=turn password=turn connect_timeout=30"
 
 # Redis（用于 OAuth 和统计）
-#redis-userdb="host=127.0.0.1 dbname=0 port=6379 connect_timeout=30"
+#redis-userdb="ip=127.0.0.1 dbname=0 password= port=6379 connect_timeout=30"
 
 # -----------------------------------------------------------
 # 性能调优（可选）
 # -----------------------------------------------------------
 
 # 工作线程数（默认 = CPU 核心数）
+#relay-threads=0
+
+# 系统日志
 #syslog
 
 # UDP 接收缓冲大小
