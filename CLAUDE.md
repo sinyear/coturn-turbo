@@ -77,11 +77,10 @@ make -j$(nproc)
 - `--use-afxdp` — 使用 AF_XDP 网络后端（需 Linux 内核 ≥5.4 及 libbpf/libxdp）
 
 构建产物包含：
-- `turnserver` — TURN/STUN 主服务进程
+- `turnserver` — TURN/STUN 主服务进程（Turbo 功能直接集成其中，通过 `--turbo` 参数激活）
 - `turnadmin` — 用户数据库管理工具
 - `turnutils` — 测试工具集（uclient、peer、stunclient）
-- `conductor` — 分布式调度服务（仅 Turbo 构建）
-- `turboserver` — 高性能数据平面进程（与 turnserver 集成，通过 `--turbo` 启动参数激活）
+- `conductor` — 分布式调度服务（仅 CMake 构建）
 
 卸载命令：`cmake --build build --target uninstall` 或 `make uninstall`
 

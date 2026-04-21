@@ -571,12 +571,13 @@ turnserver -c /etc/turnserver.conf
 
 ```bash
 # 安装 DPDK 依赖
-sudo apt install -y meson ninja-build libnuma-dev
+sudo apt install -y meson ninja-build libnuma-dev python3-pyelftools
 
-# 编译 DPDK
+# 编译 DPDK（推荐 ≥22.07）
 wget https://fast.dpdk.org/rel/dpdk-22.07.tar.xz
 tar xJf dpdk-22.07.tar.xz && cd dpdk-22.07
-meson build && cd build && ninja && sudo ninja install
+meson build --prefix=/usr && cd build && ninja && sudo ninja install
+sudo ldconfig
 
 # 编译 coturn-turbo
 cd coturn-turbo
@@ -584,6 +585,8 @@ cd coturn-turbo
 make -j$(nproc)
 sudo make install
 ```
+
+> **注意**：`--turbo --use-dpdk` 是 configure 脚本的正式选项。脚本会自动检查 DPDK ≥22.07，通过后注入 `-DTURN_TURBO -DTURN_USE_DPDK` 到编译标志。Makefile 检测到这些宏后会编译 `turbo_dpdk.c` 并链接 `libdpdk`。
 
 #### 部署
 
@@ -599,38 +602,45 @@ sudo make install
    sudo dpdk-devbind.py -b vfio-pci 0000:02:00.0
    ```
 
-3. **配置 turbo.conf**：
-   ```yaml
-   netif_backend = dpdk
-   dpdk {
-       pci_whitelist = "0000:02:00.0"
-       core_mask = 0x3
-       master_lcore = 0
-   }
+3. **配置 turnserver.conf**：
+   ```ini
+   listening-port=3478
+   listening-ip=0.0.0.0
+   relay-ip=0.0.0.0
+   listening-device=0000:02:00.0
+   realm=north
+   lt-cred-mech
+   user=claude:password
+
+   # Turbo 模式（必须，否则无法启用 SFU 广播）
+   turbo=true
+   turbo-api-port=9999
    ```
 
 4. **启动**：
    ```bash
-   sudo turnserver -c /etc/turnserver.conf --turbo --turbo-conf /etc/turbo.conf
+   # DPDK 模式需要 root 权限
+   sudo turnserver -c /etc/turnserver.conf --turbo -o -v
    ```
 
 #### 部署要求
 
 | 维度 | 要求 |
 | :--- | :--- |
-| **CPU** | x86-64，需通过 isolcpus 预留独占核心 |
-| **内存** | 大页内存（Hugepages） |
+| **CPU** | x86-64，建议预留 1-2 个核心给 DPDK |
+| **内存** | 大页内存（Hugepages）≥1GB |
 | **网卡** | DPDK 兼容（Intel X500/700/800，Mellanox ConnectX-4/5/6） |
 | **内核** | 无强制要求 |
 | **BIOS** | 建议启用 VT-d/AMD-Vi (IOMMU) |
+| **权限** | 需要 root 或 CAP_SYS_ADMIN |
 
 ### 13.3 AF_XDP 模式
 
 #### 构建
 
 ```bash
-# 安装 AF_XDP 依赖
-sudo apt install -y clang llvm libbpf-dev libxdp-dev
+# 安装 AF_XDP 依赖（内核 ≥5.4）
+sudo apt install -y clang llvm libbpf-dev libxdp-dev libjson-c-dev
 
 # 编译 coturn-turbo
 cd coturn-turbo
@@ -639,27 +649,35 @@ make -j$(nproc)
 sudo make install
 ```
 
+> **注意**：`--turbo --use-afxdp` 是 configure 脚本的正式选项。脚本会自动检查 libbpf、libxdp、libjson-c，通过后注入 `-DTURN_TURBO -DTURN_USE_AFXDP` 到编译标志。Makefile 检测到这些宏后会编译 `turbo_af_xdp.c` 并链接 `-lbpf -lxdp -ljson-c`。
+
 #### 部署
 
-1. **配置大页内存**：
+1. **检查内核支持**：
    ```bash
-   echo 1024 | sudo tee /sys/kernel/mm/hugepages/hugepages-2048kB/nr_hugepages
+   uname -r  # 需 ≥5.4
+   ethtool -k eth0 | grep xdp
    ```
 
-2. **配置 turbo.conf**：
-   ```yaml
-   netif_backend = af_xdp
-   af_xdp {
-       iface = "eth0"
-       queue_id = 0
-       udp_port = 3478
-       zero_copy = true
-   }
+2. **配置 turnserver.conf**：
+   ```ini
+   listening-port=3478
+   listening-ip=0.0.0.0
+   relay-ip=0.0.0.0
+   listening-device=eth0
+   realm=north
+   lt-cred-mech
+   user=claude:password
+
+   # Turbo 模式
+   turbo=true
+   turbo-api-port=9999
    ```
 
 3. **启动**：
    ```bash
-   sudo turnserver -c /etc/turnserver.conf --turbo --turbo-conf /etc/turbo.conf
+   # AF_XDP 模式需要 root 权限（加载 XDP 程序）
+   sudo turnserver -c /etc/turnserver.conf --turbo -o -v
    ```
 
 #### 部署要求
@@ -668,15 +686,40 @@ sudo make install
 | :--- | :--- |
 | **内核** | ≥ 5.4（推荐 5.10+） |
 | **网卡** | XDP 原生模式兼容（Intel i40e/ice/ixgbe，Mellanox mlx5） |
-| **大页内存** | 必须，但对容量要求低于 DPDK |
 | **网卡独占** | 无需，可与内核共享 |
+| **权限** | 需要 root 或 CAP_BPF + CAP_NET_ADMIN |
 
-### 13.4 Conductor 部署
+### 13.4 编译模式总结
+
+| 模式 | configure 命令 | 最终 CFLAGS 宏 | 后端 | 配置文件 | 启动命令 |
+|------|----------------|----------------|------|----------|----------|
+| 标准 | `./configure` | （无） | 内核协议栈 | turnserver.conf | `turnserver -c ...` |
+| DPDK | `./configure --turbo --use-dpdk` | `-DTURN_TURBO -DTURN_USE_DPDK` | DPDK 用户态 | turnserver.conf | `sudo turnserver -c ... --turbo` |
+| AF_XDP | `./configure --turbo --use-afxdp` | `-DTURN_TURBO -DTURN_USE_AFXDP` | AF_XDP 内核旁路 | turnserver.conf | `sudo turnserver -c ... --turbo` |
+
+> **重要**：网络后端由编译时 configure 选项决定，**不可运行时切换**。DPDK 和 AF_XDP 分别编译为不同的二进制。
+
+### 13.5 Conductor 分布式调度部署
+
+Conductor 是独立进程，负责房间调度与节点管理。
+
+#### 构建
+
+> **注意**：Conductor 仅通过 CMake 构建，不在 autotools Makefile 中。
 
 ```bash
-cd src/apps/conductor
-make
-./conductor -l 0.0.0.0 -p 8080 -r redis://localhost:6379
+cd coturn-turbo
+mkdir -p build_conductor && cd build_conductor
+cmake .. -DWITH_HIREDIS=ON  # 如需 Redis 支持
+make conductor -j$(nproc)
+```
+
+#### 启动
+
+```bash
+# 需要 Redis 作为全局状态同步后端
+conductor --listen 0.0.0.0 --port 8080 --ws-port 8765 \
+    --redis "redis://127.0.0.1:6379/0" --node-id "conductor-1"
 ```
 
 ## 十四、参考资料

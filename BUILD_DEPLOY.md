@@ -101,8 +101,8 @@ pkg-config --modversion libdpdk
 ```bash
 cd coturn-turbo
 
-# 生成 Makefile 并注入 DPDK 编译标志
-./configure CFLAGS="-DTURN_USE_DPDK $(pkg-config --cflags libdpdk 2>/dev/null)"
+# 生成 Makefile（configure 脚本会自动检查 DPDK 依赖）
+./configure --turbo --use-dpdk
 
 # 编译
 make -j$(nproc)
@@ -111,7 +111,7 @@ make -j$(nproc)
 sudo make install
 ```
 
-> **关键**：`CFLAGS` 中的 `-DTURN_USE_DPDK` 宏决定编译时选择 DPDK 网络后端。Makefile 会自动检测该宏并编译 `turbo_dpdk.c`、链接 `libdpdk`。
+> **关键**：`--turbo --use-dpdk` 是 configure 脚本的正式选项。脚本会自动检查 DPDK ≥22.07，通过后注入 `-DTURN_TURBO -DTURN_USE_DPDK` 到编译标志。Makefile 检测到这些宏后会编译 `turbo_dpdk.c` 并链接 `libdpdk`。
 
 ### 2.3 AF_XDP Turbo 模式
 
@@ -132,8 +132,8 @@ yum install -y clang llvm libbpf-devel libxdp-devel json-c-devel
 ```bash
 cd coturn-turbo
 
-# 生成 Makefile 并注入 AF_XDP 编译标志
-./configure CFLAGS="-DTURN_USE_AFXDP"
+# 生成 Makefile（configure 脚本会自动检查 AF_XDP 依赖）
+./configure --turbo --use-afxdp
 
 # 编译
 make -j$(nproc)
@@ -142,7 +142,7 @@ make -j$(nproc)
 sudo make install
 ```
 
-> **关键**：`CFLAGS` 中的 `-DTURN_USE_AFXDP` 宏决定编译时选择 AF_XDP 网络后端。Makefile 会自动检测该宏并编译 `turbo_af_xdp.c`、链接 `-lbpf -lxdp -ljson-c`。
+> **关键**：`--turbo --use-afxdp` 是 configure 脚本的正式选项。脚本会自动检查 libbpf、libxdp、libjson-c，通过后注入 `-DTURN_TURBO -DTURN_USE_AFXDP` 到编译标志。Makefile 检测到这些宏后会编译 `turbo_af_xdp.c` 并链接 `-lbpf -lxdp -ljson-c`。
 
 ---
 
@@ -286,6 +286,7 @@ dpdk-devbind.py --status
 listening-port=3478
 listening-ip=0.0.0.0
 relay-ip=0.0.0.0
+listening-device=0000:02:00.0
 realm=north
 lt-cred-mech
 user=claude:password
@@ -332,8 +333,8 @@ ethtool -k eth0 | grep xdp
 listening-port=3478
 listening-ip=0.0.0.0
 relay-ip=0.0.0.0
-realm=north
-lt-cred-mech
+listening-device=eth0
+realm=northlt-cred-mech
 user=claude:password
 
 # Turbo 模式
@@ -363,11 +364,13 @@ Conductor 是独立进程，用于多节点集群的房间调度与信令管理�
 
 #### 4.4.1 编译
 
+> **注意**：Conductor 仅通过 CMake 构建，不在 Makefile 中。
+
 ```bash
-cd coturn-turbo/src/apps/conductor
-# Conductor 编译由主 Makefile 处理
-cd ../../..
-make conductor 2>/dev/null || true
+cd coturn-turbo
+mkdir -p build_conductor && cd build_conductor
+cmake .. -DWITH_HIREDIS=ON  # 如需 Redis 支持
+make conductor -j$(nproc)
 ```
 
 #### 4.4.2 启动
@@ -397,6 +400,9 @@ turnserver -c /etc/turnserver/turnserver.conf -o \
 ```
 
 ### 5.2 Turbo 模式（DPDK / AF_XDP）
+
+> **警告**：`--turbo` 选项**仅在编译时包含 `-DTURN_USE_DPDK` 或 `-DTURN_USE_AFXDP` 时可用**。
+> 标准模式（无 Turbo 编译）设置 `--turbo` 会导致 `turbo_netif_init()` 返回 NULL，服务器直接 exit(-1)。
 
 ```bash
 # 前台运行（调试）
@@ -532,18 +538,44 @@ curl -s "http://localhost:9999/v1/room/info?room_id=perf_test" | python3 -m json
 
 | 问题 | 解决方案 |
 |------|----------|
-| `Failed to initialize turbo network interface` | 检查网卡是否正确绑定到 vfio-pci |
+| `Failed to initialize turbo network interface` | 检查 `af_xdp:` 前缀的具体错误输出；对于 DPDK：`dpdk-devbind.py --status` 确认网卡绑定到 vfio-pci |
 | 大页内存不足 | `grep Huge /proc/meminfo`，增加 nr_hugepages |
 | EAL 初始化失败 | 确保以 root 运行，检查 IOMMU 是否在 BIOS 中启用 |
-| 启动崩溃（`turbo=true`） | 确认编译时带 `-DTURN_USE_DPDK`，运行 `turnserver --version` 检查 |
+| 启动崩溃（`turbo=true`） | 确认编译时使用了 `--turbo --use-dpdk`；通过 `ldd bin/turnserver \| grep dpdk` 验证 |
 
 ### 7.3 AF_XDP 模式
 
 | 问题 | 解决方案 |
 |------|----------|
-| `Failed to initialize turbo network interface` | 检查接口名是否正确，确认内核 ≥5.4 |
-| XDP 程序加载失败 | 安装 libbpf-dev、libxdp-dev，检查网卡驱动是否支持 XDP |
-| 启动崩溃（`turbo=true`） | 确认编译时带 `-DTURN_USE_AFXDP`，运行 `turnserver --version` 检查 |
+| `Failed to initialize turbo network interface` + `interface 'xxx' not found` | 确认网卡名称正确：`ip link show` |
+| `Failed to initialize turbo network interface` + `xsk_umem__create failed` | 内存不足或权限不够，确保 root 运行 |
+| `Failed to initialize turbo network interface` + `xsk_socket__create failed` | 网卡不支持 XDP，检查驱动：`ethtool -k <网卡> \| grep xdp`；某些虚拟化网卡（如 virtio）不支持原生 XDP，尝试改用 SKB 模式 |
+| XDP 程序加载失败 | 安装 libbpf-dev、libxdp-dev；确认内核 ≥5.4 |
+| 启动崩溃（`turbo=true`） | 确认编译时使用了 `--turbo --use-afxdp`；通过 `ldd bin/turnserver \| grep xdp` 验证 |
+
+**AF_XDP 详细排查步骤**：
+
+```bash
+# 1. 确认网卡存在且有 IP
+ip addr show enp2s0
+
+# 2. 检查驱动是否支持 XDP
+ethtool -k enp2s0 | grep -i xdp
+
+# 3. 检查 XDP 模式支持情况
+#    如果 ethtool 显示 "off [fixed]"，说明是虚拟化网卡，不支持原生 XDP
+#    SKB 模式下大部分网卡都能工作，但性能较低
+
+# 4. 手动测试 AF_XDP socket 创建
+sudo ip link set dev enp2s0 xdp off  # 先清理残留
+sudo turnserver -c /etc/turnserver/turnserver.conf --turbo -V 2>&1 | grep af_xdp
+
+# 5. 如果仍失败，检查内核日志
+dmesg | tail -20
+
+# 6. 确认 libbpf/libxdp 链接正确
+ldd bin/turnserver | grep -E "bpf|xdp"
+```
 
 ### 7.4 通用排查
 
@@ -564,16 +596,17 @@ ldd bin/turnserver | grep -E "dpdk|bpf|xdp"
 
 ### 8.1 Turbo 相关配置参数
 
-| 参数 | 类型 | 默认值 | 说明 |
-|------|------|--------|------|
-| `turbo` | bool | false | 启用 Turbo 模式。仅在编译时包含 `-DTURN_USE_DPDK` 或 `-DTURN_USE_AFXDP` 时可设为 true |
-| `turbo-api-port` | uint16 | 0（禁用） | Turbo HTTP API 端口，提供房间管理 REST 接口 |
+| 参数 | 类型 | 默认值 | 命令行 | 配置文件 | 说明 |
+|------|------|--------|--------|----------|------|
+| `turbo` | bool | false | `--turbo` | `turbo=true` | 启用 Turbo 模式。仅在编译时使用 `--turbo --use-dpdk` 或 `--turbo --use-afxdp` 时可设为 true |
+| `turbo-api-port` | uint16 | 0（禁用） | `--turbo-api-port <port>` | `turbo-api-port=<port>` | Turbo HTTP API 端口，提供房间管理 REST 接口 |
+| `listening-device` | string | "" | `-d <device>` | `listening-device=<name>` | Turbo 模式下指定网卡：DPDK 用端口 ID/PCI 地址，AF_XDP 用接口名 |
 
 ### 8.2 三种模式对比
 
 | 特性 | 标准模式 | DPDK Turbo | AF_XDP Turbo |
 |------|----------|------------|--------------|
-| 编译标志 | 无 | `-DTURN_USE_DPDK` | `-DTURN_USE_AFXDP` |
+| 编译标志 | 无 | `--turbo --use-dpdk` → `-DTURN_TURBO -DTURN_USE_DPDK` | `--turbo --use-afxdp` → `-DTURN_TURBO -DTURN_USE_AFXDP` |
 | 网络后端 | 内核协议栈 | DPDK 用户态 | AF_XDP 内核旁路 |
 | 端口模型 | 每会话分配端口 | 单端口复用 (3478) | 单端口复用 (3478) |
 | SFU 广播 | 不支持 | 支持 | 支持 |
@@ -606,12 +639,15 @@ sudo turnserver -c /etc/turnserver/turnserver.conf -o
 ### DPDK 模式一键启动
 
 ```bash
+# 0. 检查 DPDK 安装
+pkg-config --modversion libdpdk || echo "请先安装 DPDK（参见 2.2.1）"
+
 # 1. 安装 DPDK
 apt-get install -y meson ninja-build libnuma-dev
 # (下载编译 DPDK 22.07+，参见 2.2.1)
 
 # 2. 编译
-./configure CFLAGS="-DTURN_USE_DPDK $(pkg-config --cflags libdpdk 2>/dev/null)"
+./configure --turbo --use-dpdk
 make -j$(nproc) && sudo make install
 
 # 3. 配置
@@ -630,7 +666,7 @@ sudo turnserver -c /etc/turnserver/turnserver.conf --turbo --turbo-api-port 9999
 apt-get install -y clang llvm libbpf-dev libxdp-dev libjson-c-dev
 
 # 2. 编译
-./configure CFLAGS="-DTURN_USE_AFXDP"
+./configure --turbo --use-afxdp
 make -j$(nproc) && sudo make install
 
 # 3. 启动
