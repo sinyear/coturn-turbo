@@ -1,4 +1,5 @@
 #include "turbo_switch.h"
+#include "../network/turbo_port.h"
 #include <netinet/ip.h>
 #include <netinet/ip6.h>
 #include <netinet/udp.h>
@@ -12,7 +13,7 @@
 
 /* Address family constants */
 #define AF_INET4  4
-#define AF_INET6  6
+/* AF_INET6 is already defined in system headers via <netinet/in.h> */
 
 /* IPv6 pseudo-header for UDP checksum (RFC 2460) */
 struct ipv6_pseudo_hdr {
@@ -58,6 +59,7 @@ uint16_t turbo_ipv4_checksum(void *iphdr, size_t len) {
 /* Compute UDP checksum for IPv4 */
 uint16_t turbo_udp_checksum(const uint8_t *pkt, size_t pkt_len,
                             uint32_t src_addr, uint32_t dst_addr) {
+    (void)pkt_len;
     const struct iphdr *iph = (const struct iphdr *)pkt;
     uint8_t ip_hdr_len = (iph->ihl << 2);
     const struct udphdr *udph = (const struct udphdr *)(pkt + ip_hdr_len);
@@ -80,7 +82,7 @@ uint16_t turbo_udp_checksum(const uint8_t *pkt, size_t pkt_len,
     sum = inet_checksum((const uint16_t *)pseudo, sizeof(pseudo), sum);
 
     const uint8_t *udp_start = pkt + ip_hdr_len;
-    struct udphdr *udp_tmp = (struct udphdr *)udp_start;
+    struct udphdr *udp_tmp = (struct udphdr *)(uintptr_t)udp_start;
     uint16_t orig_csum = udp_tmp->check;
     udp_tmp->check = 0;
 
@@ -93,7 +95,7 @@ uint16_t turbo_udp_checksum(const uint8_t *pkt, size_t pkt_len,
 /* Compute UDP checksum for IPv6 */
 uint16_t turbo_udp6_checksum(const uint8_t *pkt, size_t pkt_len,
                              const uint8_t *src_addr, const uint8_t *dst_addr) {
-    const struct ip6_hdr *iph6 = (const struct ip6_hdr *)pkt;
+    (void)pkt_len;
     const struct udphdr *udph = (const struct udphdr *)(pkt + sizeof(struct ip6_hdr));
     uint16_t udp_len = ntohs(udph->len);
 
@@ -112,7 +114,7 @@ uint16_t turbo_udp6_checksum(const uint8_t *pkt, size_t pkt_len,
     sum = inet_checksum((const uint16_t *)&pseudo, sizeof(pseudo), sum);
 
     const uint8_t *udp_start = pkt + sizeof(struct ip6_hdr);
-    struct udphdr *udp_tmp = (struct udphdr *)udp_start;
+    struct udphdr *udp_tmp = (struct udphdr *)(uintptr_t)udp_start;
     uint16_t orig_csum = udp_tmp->check;
     udp_tmp->check = 0;
 
@@ -278,7 +280,6 @@ int turbo_switch_broadcast(struct turbo_netif *netif,
     }
 
     int prepared = 0;
-    int addr_size = (af == AF_INET6) ? 16 : 4;
 
     for (int i = 0; i < num_dsts && prepared < tx_array_size; i++) {
         struct turbo_packet *cloned = netif->ops->clone_pkt(netif, pkt);

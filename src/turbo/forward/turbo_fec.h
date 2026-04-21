@@ -12,7 +12,7 @@
  * Can recover from up to M lost packets in each group.
  *
  * This is an optional feature for lossy networks.
- * Disabled by default; enable via turbo.conf: fec-enabled=true
+ * Disabled by default; planned as an optional feature for lossy networks.
  */
 
 /* FEC context */

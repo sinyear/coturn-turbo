@@ -45,6 +45,7 @@ static uint32_t room_hash(uint32_t room_id, uint32_t seed) {
 }
 
 /* Hash function for member IDs within a room */
+__attribute__((unused))
 static uint32_t member_hash(uint32_t member_id, uint32_t seed) {
     return room_hash(member_id, seed);
 }
@@ -167,6 +168,7 @@ static struct turbo_room* turbo_room_get_dpdk(struct turbo_room_mgr *mgr, uint32
 
 static int turbo_room_mgr_init_custom(struct turbo_room_mgr *mgr,
                                     uint32_t max_rooms, uint32_t max_members_per_room) {
+    (void)max_rooms; (void)max_members_per_room;
     mgr->room_hash.num_buckets = HASH_BUCKETS_DEFAULT;
     mgr->room_hash.hash_seed = 0xdeadbeef;
     mgr->room_hash.buckets = calloc(mgr->room_hash.num_buckets, sizeof(struct turbo_room*));
@@ -391,7 +393,6 @@ int turbo_room_add_member(struct turbo_room_mgr *mgr, uint32_t room_id,
                          uint32_t member_id, struct sockaddr_in *addr, uint16_t port) {
     struct turbo_room *room;
     struct turbo_member *member;
-    uint32_t bucket;
 
     if (!mgr || !addr) {
         return -EINVAL;
