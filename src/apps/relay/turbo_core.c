@@ -6,9 +6,7 @@
 #include <unistd.h>
 #include <sys/time.h>
 #include <netinet/in.h>
-#include "../network/turbo_port.h"
-
-#if defined(TURN_TURBO)
+#include "turbo_port.h"
 
 #define TURBO_MAX_SESSIONS 65536
 
@@ -288,58 +286,3 @@ void turbo_core_reset_stats(struct turbo_core *core) {
     core->lookup_misses = 0;
 }
 
-#else /* !TURN_TURBO */
-
-int turbo_core_init(struct turbo_core *core, struct turbo_netif *netif, struct turbo_room_mgr *room_mgr) {
-    (void)core; (void)netif; (void)room_mgr;
-    return -1;
-}
-
-int turbo_core_start(struct turbo_core *core) {
-    (void)core;
-    return -1;
-}
-
-void turbo_core_stop(struct turbo_core *core) {
-    (void)core;
-}
-
-void turbo_core_cleanup(struct turbo_core *core) {
-    (void)core;
-}
-
-int turbo_core_process_packet(struct turbo_core *core, struct turbo_packet *pkt) {
-    (void)core; (void)pkt;
-    return -1;
-}
-
-int turbo_core_register_session(struct turbo_core *core, uint32_t room_id, uint32_t member_id,
-                                uint32_t src_addr, uint16_t src_port) {
-    (void)core; (void)room_id; (void)member_id; (void)src_addr; (void)src_port;
-    return -1;
-}
-
-void turbo_core_unregister_session(struct turbo_core *core, uint32_t src_addr, uint16_t src_port) {
-    (void)core; (void)src_addr; (void)src_port;
-}
-
-int turbo_core_register_session_af(struct turbo_core *core, uint32_t room_id, uint32_t member_id,
-                                   const uint8_t *src_addr, size_t addr_len, uint16_t src_port, uint8_t af) {
-    (void)core; (void)room_id; (void)member_id; (void)src_addr; (void)addr_len; (void)src_port; (void)af;
-    return -1;
-}
-
-void turbo_core_unregister_session_af(struct turbo_core *core, const uint8_t *src_addr, size_t addr_len,
-                                      uint16_t src_port, uint8_t af) {
-    (void)core; (void)src_addr; (void)addr_len; (void)src_port; (void)af;
-}
-
-void turbo_core_get_stats(struct turbo_core *core, turbo_core_stats_t *stats) {
-    (void)core; (void)stats;
-}
-
-void turbo_core_reset_stats(struct turbo_core *core) {
-    (void)core;
-}
-
-#endif /* TURN_TURBO */

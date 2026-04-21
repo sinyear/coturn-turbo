@@ -3,10 +3,7 @@
 #include "ns_turn_utils.h"
 #include <stdlib.h>
 #include <string.h>
-
-#if defined(TURN_TURBO)
-
-#include "../../turbo/forward/turbo_switch.h"
+#include "turbo_switch.h"
 #include <netinet/ip.h>
 #include <netinet/udp.h>
 
@@ -56,6 +53,7 @@ int turbo_forward_process_packet(struct turbo_forward_ctx *ctx,
 int turbo_forward_fast_path(struct turbo_forward_ctx *ctx,
                             const uint8_t *data, size_t len,
                             const struct sockaddr_in *src_addr) {
+    (void)src_addr;
     if (!ctx || !data || len < 28) {
         return -1;
     }
@@ -74,7 +72,7 @@ int turbo_forward_fast_path(struct turbo_forward_ctx *ctx,
 
     /* Create temporary packet for broadcast */
     struct turbo_packet pkt = {0};
-    pkt.data = (void *)data;
+    pkt.data = (void *)(uintptr_t)data;
     pkt.len = len;
     pkt.buf_len = len;
 
@@ -83,26 +81,3 @@ int turbo_forward_fast_path(struct turbo_forward_ctx *ctx,
     return (sent > 0) ? 0 : -1;
 }
 
-#else /* !TURN_TURBO */
-
-void turbo_forward_init(struct turbo_forward_ctx *ctx,
-                        struct turbo_room_mgr *room_mgr,
-                        struct turbo_port_map *port_map,
-                        struct turbo_netif *netif) {
-    (void)ctx; (void)room_mgr; (void)port_map; (void)netif;
-}
-
-int turbo_forward_process_packet(struct turbo_forward_ctx *ctx,
-                                 struct turbo_packet *pkt) {
-    (void)ctx; (void)pkt;
-    return -1;
-}
-
-int turbo_forward_fast_path(struct turbo_forward_ctx *ctx,
-                            const uint8_t *data, size_t len,
-                            const struct sockaddr_in *src_addr) {
-    (void)ctx; (void)data; (void)len; (void)src_addr;
-    return -1;
-}
-
-#endif /* TURN_TURBO */

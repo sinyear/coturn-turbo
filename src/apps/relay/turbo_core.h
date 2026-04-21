@@ -1,9 +1,9 @@
 #ifndef TURBO_CORE_H
 #define TURBO_CORE_H
 
-#include "../network/turbo_netif.h"
-#include "../network/turbo_port.h"
-#include "../forward/turbo_room.h"
+#include "turbo_netif.h"
+#include "turbo_port.h"
+#include "turbo_room.h"
 #include <stdint.h>
 #include <pthread.h>
 #include <stdatomic.h>

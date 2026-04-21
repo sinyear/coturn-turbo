@@ -162,7 +162,11 @@ message("turnserver_LIBS:${turnserver_LIBS}")
 
 add_executable(${PROJECT_NAME} ${SOURCE_FILES} ${HEADER_FILES})
 target_link_libraries(${PROJECT_NAME} PRIVATE turn_server ${turnserver_LIBS})
-target_include_directories(${PROJECT_NAME} PRIVATE ${turnserver_include_dirs})
+target_include_directories(${PROJECT_NAME} PRIVATE ${turnserver_include_dirs}
+    ${CMAKE_SOURCE_DIR}/turbo/network
+    ${CMAKE_SOURCE_DIR}/turbo/forward
+    ${CMAKE_SOURCE_DIR}/turbo/utils
+)
 target_compile_definitions(${PROJECT_NAME} PRIVATE ${turnserver_DEFINED})
 
 # Turbo extensions
@@ -170,7 +174,6 @@ if(TURN_TURBO)
     list(APPEND turnserver_DEFINED TURN_TURBO)
     target_sources(${PROJECT_NAME} PRIVATE turbo_api.c turbo_api.h turbo_core.c turbo_core.h turbo_forward.c turbo_forward.h)
     target_link_libraries(${PROJECT_NAME} PRIVATE turbo_network turbo_forward turbo_utils)
-    target_include_directories(${PROJECT_NAME} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
     if(TURN_USE_DPDK)
         list(APPEND turnserver_DEFINED TURN_USE_DPDK)
         pkg_check_modules(DPDK REQUIRED libdpdk)

@@ -1,10 +1,10 @@
 #ifndef TURBO_FORWARD_APP_H
 #define TURBO_FORWARD_APP_H
 
-#include "../../turbo/network/turbo_netif.h"
-#include "../../turbo/network/turbo_port.h"
-#include "../../turbo/forward/turbo_room.h"
-#include "../../turbo/forward/turbo_switch.h"
+#include "turbo_netif.h"
+#include "turbo_port.h"
+#include "turbo_room.h"
+#include "turbo_switch.h"
 #include <stdint.h>
 
 /**

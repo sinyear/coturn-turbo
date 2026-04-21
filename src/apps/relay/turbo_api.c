@@ -13,6 +13,8 @@
 #include "ns_turn_utils.h"
 
 #if defined(TURN_TURBO)
+#include "../../turbo/forward/turbo_room.h"
+#endif
 
 #include <event2/event.h>
 #include <event2/http.h>
@@ -22,7 +24,7 @@
 #include <string.h>
 #include <stdatomic.h>
 #include <arpa/inet.h>
-#include "../../turbo/utils/turbo_json.h"
+#include "turbo_json.h"
 
 #ifdef TURN_USE_DPDK
 #include <rte_hash.h>
@@ -375,14 +377,3 @@ void turbo_api_stop(void) {
     }
 }
 
-#else /* !TURN_TURBO */
-
-int turbo_api_start(uint16_t port) {
-    (void)port;
-    return 0;
-}
-
-void turbo_api_stop(void) {
-}
-
-#endif /* TURN_TURBO */

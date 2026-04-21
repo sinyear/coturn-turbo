@@ -1,8 +1,7 @@
 
 LIBEVENT_INCLUDE = -I${PREFIX}/include/ -I/usr/local/include/
 
-INCFLAGS = -Isrc -Isrc/apps/common -Isrc/server -Isrc/client -Isrc/client++ ${LIBEVENT_INCLUDE}
-
+INCFLAGS = -Isrc -Isrc/apps/common -Isrc/server -Isrc/client -Isrc/client++ -Isrc/turbo/network -Isrc/turbo/forward -Isrc/turbo/utils ${LIBEVENT_INCLUDE}
 CFLAGS += ${INCFLAGS}
 
 MAKE_DEPS = Makefile
@@ -32,7 +31,27 @@ USERDB_MODS = src/apps/relay/dbdrivers/dbdriver.c src/apps/relay/dbdrivers/dbd_s
 
 SERVERAPP_HEADERS = src/apps/relay/userdb.h src/apps/relay/tls_listener.h src/apps/relay/mainrelay.h src/apps/relay/turn_admin_server.h src/apps/relay/dtls_listener.h src/apps/relay/libtelnet.h src/apps/relay/prom_server.h ${HIREDIS_HEADERS} ${USERDB_HEADERS}
 SERVERAPP_MODS = src/apps/relay/mainrelay.c src/apps/relay/netengine.c src/apps/relay/libtelnet.c src/apps/relay/turn_admin_server.c src/apps/relay/userdb.c src/apps/relay/tls_listener.c src/apps/relay/dtls_listener.c src/apps/relay/prom_server.c ${HIREDIS_MODS} ${USERDB_MODS}
-SERVERAPP_DEPS = ${SERVERTURN_MODS} ${SERVERTURN_DEPS} ${SERVERAPP_MODS} ${SERVERAPP_HEADERS} ${COMMON_DEPS} ${IMPL_DEPS} lib/libturnclient.a
+
+TURBO_UTILS_MODS = src/turbo/utils/turbo_hash.c src/turbo/utils/turbo_json.c src/turbo/utils/turbo_rcu.c
+TURBO_NETWORK_MODS = src/turbo/network/turbo_netif.c src/turbo/network/turbo_port.c src/turbo/network/turbo_mempool.c
+TURBO_FORWARD_MODS = src/turbo/forward/turbo_room.c src/turbo/forward/turbo_switch.c src/turbo/forward/turbo_fec.c
+TURBO_APP_MODS = src/apps/relay/turbo_core.c src/apps/relay/turbo_api.c src/apps/relay/turbo_forward.c
+
+# Conditional network backend source
+ifneq (,$(findstring TURN_USE_DPDK,${CFLAGS}))
+TURBO_NETWORK_BACKEND_MODS = src/turbo/network/turbo_dpdk.c
+TURBO_LDFLAGS = $(shell pkg-config --libs libdpdk 2>/dev/null || echo "")
+else ifneq (,$(findstring TURN_USE_AFXDP,${CFLAGS}))
+TURBO_NETWORK_BACKEND_MODS = src/turbo/network/turbo_af_xdp.c
+TURBO_LDFLAGS =  -lbpf  -lxdp -ljson-c
+else
+TURBO_NETWORK_BACKEND_MODS =
+TURBO_LDFLAGS =
+endif
+
+TURBO_MODS = ${TURBO_UTILS_MODS} ${TURBO_NETWORK_MODS} ${TURBO_FORWARD_MODS} ${TURBO_APP_MODS} ${TURBO_NETWORK_BACKEND_MODS}
+
+SERVERAPP_DEPS = ${SERVERTURN_MODS} ${SERVERTURN_DEPS} ${SERVERAPP_MODS} ${SERVERAPP_HEADERS} ${COMMON_DEPS} ${IMPL_DEPS} lib/libturnclient.a ${TURBO_MODS}
 
 TURN_BUILD_RESULTS = bin/turnutils_oauth bin/turnutils_natdiscovery bin/turnutils_stunclient bin/turnutils_rfc5769check bin/turnutils_uclient bin/turnserver bin/turnutils_peer lib/libturnclient.a include/turn/ns_turn_defs.h sqlite_empty_db
 
@@ -85,7 +104,7 @@ bin/turnutils_rfc5769check: ${COMMON_DEPS} lib/libturnclient.a src/apps/rfc5769/
 bin/turnserver: ${SERVERAPP_DEPS} src/apps/relay/acme.h src/apps/relay/http_server.h
 	${MKBUILDDIR} bin
 	${RMCMD} bin/turnadmin
-	${CC} ${CPPFLAGS} ${CFLAGS} ${DBCFLAGS} ${IMPL_MODS} -Ilib ${SERVERAPP_MODS} ${COMMON_MODS} ${SERVERTURN_MODS} -o $@ ${DBLIBS} ${LDFLAGS}
+	${CC} ${CPPFLAGS} ${CFLAGS} ${DBCFLAGS} ${IMPL_MODS} -Ilib ${SERVERAPP_MODS} ${COMMON_MODS} ${SERVERTURN_MODS} ${TURBO_MODS} -o $@ ${DBLIBS} ${LDFLAGS} ${TURBO_LDFLAGS}
 	cd bin; ln -s turnserver turnadmin
 
 bin/turnutils_peer: ${COMMON_DEPS} ${LIBCLIENTTURN_MODS} ${LIBCLIENTTURN_DEPS} lib/libturnclient.a src/apps/peer/mainudpserver.c src/apps/peer/udpserver.h src/apps/peer/udpserver.c src/server/ns_turn_ioalib.h

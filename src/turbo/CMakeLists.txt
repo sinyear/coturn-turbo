@@ -9,6 +9,4 @@ add_subdirectory(network)
 add_subdirectory(forward)
 
 # Add utils library
-if(TURN_TURBO)
-    add_subdirectory(utils)
-endif()
+add_subdirectory(utils)

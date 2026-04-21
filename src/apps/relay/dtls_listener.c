@@ -42,6 +42,10 @@
 #include "ns_turn_openssl.h"
 #include "prom_server.h"
 
+#if defined(TURN_TURBO)
+#include "../../turbo/forward/turbo_room.h"
+#endif
+
 #include <pthread.h>
 #include <stdint.h>
 
@@ -441,8 +445,8 @@ static int handle_udp_packet(dtls_listener_relay_server_type *server, struct mes
 
     if (s && ioa_socket_check_bandwidth(s, sm->m.sm.nd.nbh, 1)) {
       s->e = ioa_eng;
-#if defined(TURN_TURBO)
       /* Turbo fast path: check if session belongs to a room */
+#if defined(TURN_TURBO)
       if (turn_params.turbo_enabled && turbo_room_mgr && s->session) {
         ts_ur_super_session *ss = (ts_ur_super_session *)s->session;
         if (ss->room_id > 0) {
