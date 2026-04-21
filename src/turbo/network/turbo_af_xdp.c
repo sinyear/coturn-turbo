@@ -1,13 +1,26 @@
 #include "turbo_netif.h"
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
 #include <errno.h>
 #include <unistd.h>
+#include <sys/mman.h>
+#include <sys/resource.h>
 #include <net/if.h>
 #include <linux/if_xdp.h>
 #include <bpf/libbpf.h>
 #include <xdp/libxdp.h>
 #include <xdp/xsk.h>
+
+/* Compatibility: XSK_UMEM__DEFAULT_FRAME_TAILROOM was never a standard macro */
+#ifndef XSK_UMEM__DEFAULT_FRAME_TAILROOM
+#define XSK_UMEM__DEFAULT_FRAME_TAILROOM 0
+#endif
+
+/* Compatibility: XDP_FLAGS_SKB_MODE may not be defined in older libxdp */
+#ifndef XDP_FLAGS_SKB_MODE
+#define XDP_FLAGS_SKB_MODE 0U
+#endif
 
 /* AF_XDP private data structure */
 struct turbo_afxdp_priv {
@@ -56,20 +69,24 @@ static int turbo_afxdp_init(struct turbo_netif *netif, const char *ifname, uint1
     struct xsk_umem_config umem_cfg = {0};
     struct xsk_socket_config xsk_cfg = {0};
     int ret, ifindex;
-    uint32_t frame_size_total;
 
     /* Allocate private data */
     priv = calloc(1, sizeof(*priv));
     if (!priv) {
+        fprintf(stderr, "af_xdp: failed to allocate private data\n");
         return -ENOMEM;
     }
 
     /* Get interface index */
     ifindex = if_nametoindex(ifname);
     if (!ifindex) {
+        fprintf(stderr, "af_xdp: interface '%s' not found (errno=%d: %s)\n",
+                ifname, errno, strerror(errno));
+        fprintf(stderr, "af_xdp: verify the interface exists with 'ip link show %s'\n", ifname);
         free(priv);
         return -ENODEV;
     }
+    fprintf(stderr, "af_xdp: interface '%s' -> ifindex=%d\n", ifname, ifindex);
 
     /* Configure UMEM */
     priv->frame_size = XSK_UMEM__DEFAULT_FRAME_SIZE;
@@ -84,18 +101,31 @@ static int turbo_afxdp_init(struct turbo_netif *netif, const char *ifname, uint1
     umem_cfg.frame_headroom = priv->frame_headroom;
 
     /* Allocate UMEM area */
-    priv->umem_area = aligned_alloc(getpagesize(),
+    priv->umem_area = aligned_alloc(sysconf(_SC_PAGESIZE),
                                    priv->num_frames * priv->frame_size_total);
     if (!priv->umem_area) {
+        fprintf(stderr, "af_xdp: failed to allocate UMEM area (%lu bytes)\n",
+                (unsigned long)(priv->num_frames * priv->frame_size_total));
         free(priv);
         return -ENOMEM;
     }
 
     /* Create UMEM */
+    /* Increase RLIMIT_MEMLOCK to allow UMEM area to be locked into RAM.
+     * Required on kernels < 5.11 and still needed for AF_XDP on 5.15+. */
+    {
+        struct rlimit rlim = { RLIM_INFINITY, RLIM_INFINITY };
+        if (setrlimit(RLIMIT_MEMLOCK, &rlim) != 0) {
+            fprintf(stderr, "af_xdp: setrlimit(RLIMIT_MEMLOCK) failed (errno=%d: %s)\n",
+                    errno, strerror(errno));
+            fprintf(stderr, "af_xdp: try running 'ulimit -l unlimited' as root before starting\n");
+        }
+    }
     ret = xsk_umem__create(&priv->umem, priv->umem_area,
                           priv->num_frames * priv->frame_size_total,
                           &priv->fq, &priv->cq, &umem_cfg);
     if (ret) {
+        fprintf(stderr, "af_xdp: xsk_umem__create failed (errno=%d: %s)\n", ret, strerror(-ret));
         free(priv->umem_area);
         free(priv);
         return -EIO;
@@ -112,11 +142,17 @@ static int turbo_afxdp_init(struct turbo_netif *netif, const char *ifname, uint1
     ret = xsk_socket__create(&priv->xsk, ifname, 0, priv->umem,
                             &priv->rx, &priv->tx, &xsk_cfg);
     if (ret) {
+        fprintf(stderr, "af_xdp: xsk_socket__create failed (errno=%d: %s)\n", ret, strerror(-ret));
+        fprintf(stderr, "af_xdp: this usually means XDP is not supported on '%s'\n", ifname);
+        fprintf(stderr, "af_xdp: check driver XDP support: 'ethtool -k %s | grep xdp'\n", ifname);
+        fprintf(stderr, "af_xdp: or try SKB mode manually: 'ip link set dev %s xdp off' then retry\n", ifname);
         xsk_umem__delete(priv->umem);
         free(priv->umem_area);
         free(priv);
         return -EIO;
     }
+
+    fprintf(stderr, "af_xdp: successfully initialized interface '%s' (ifindex=%d)\n", ifname, ifindex);
 
     netif->priv = priv;
     netif->port = port;
@@ -222,6 +258,7 @@ static struct turbo_packet* turbo_afxdp_alloc_pkt(struct turbo_netif *netif, siz
     struct turbo_afxdp_priv *priv = netif->priv;
     uint64_t addr;
     uint32_t idx;
+    (void)size;
 
     /* Reserve from fill queue */
     if (xsk_ring_prod__reserve(&priv->fq, 1, &idx) != 1) {
@@ -235,15 +272,14 @@ static struct turbo_packet* turbo_afxdp_alloc_pkt(struct turbo_netif *netif, siz
 }
 
 static void turbo_afxdp_free_pkt(struct turbo_netif *netif, struct turbo_packet *pkt) {
+    (void)netif;
     /* For zero-copy cloned packets, we only free the packet structure */
     /* The underlying UMEM frame is managed separately */
     free(pkt);
 }
 
 static struct turbo_packet* turbo_afxdp_clone_pkt(struct turbo_netif *netif, struct turbo_packet *pkt) {
-    struct turbo_afxdp_priv *priv = netif->priv;
-    uint64_t orig_addr = (uint64_t)pkt->priv;
-
+    (void)netif;
     /* For AF_XDP, true zero-copy cloning means sharing the same UMEM frame */
     /* We create a new packet structure that references the same data */
     /* Note: In a real implementation, this would use reference counting */

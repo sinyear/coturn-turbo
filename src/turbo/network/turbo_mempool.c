@@ -3,6 +3,7 @@
 #include <string.h>
 #include <errno.h>
 #include <pthread.h>
+#include <unistd.h>
 
 /* ============================================================
  * Generic malloc-based pool implementation (always available)
@@ -18,6 +19,7 @@ struct generic_pool_priv {
     pthread_mutex_t lock;
 };
 
+__attribute__((unused))
 static struct turbo_mempool* generic_pool_create(uint32_t nb_bufs, size_t buf_size) {
     struct turbo_mempool *pool = (struct turbo_mempool *)calloc(1, sizeof(*pool));
     if (!pool) {
@@ -215,7 +217,7 @@ struct turbo_mempool* turbo_mempool_create_dpdk(const char *name,
 
 #ifdef TURN_USE_AFXDP
 
-#include <xsk/xsk.h>
+#include <xdp/xsk.h>
 
 struct afxdp_pool_priv {
     struct xsk_umem *umem;
@@ -248,7 +250,7 @@ struct turbo_mempool* turbo_mempool_create_afxdp(uint32_t num_frames, size_t fra
     umem_cfg.frame_headroom = XSK_UMEM__DEFAULT_FRAME_HEADROOM;
 
     /* Allocate UMEM area */
-    priv->umem_area = aligned_alloc(getpagesize(), num_frames * frame_size);
+    priv->umem_area = aligned_alloc(sysconf(_SC_PAGESIZE), num_frames * frame_size);
     if (!priv->umem_area) {
         free(priv);
         free(pool);
@@ -276,6 +278,7 @@ struct turbo_mempool* turbo_mempool_create_afxdp(uint32_t num_frames, size_t fra
 }
 
 static void* afxdp_pool_alloc(struct turbo_mempool *pool, size_t size) {
+    (void)size;
     if (!pool || !pool->priv) {
         return NULL;
     }
@@ -384,6 +387,8 @@ void turbo_mempool_free(struct turbo_mempool *pool, void *buf) {
     case TURBO_POOL_GENERIC:
         generic_pool_free_buf(pool, buf);
         return;
+    default:
+        return;
     }
 }
 
@@ -415,6 +420,8 @@ void turbo_mempool_destroy(struct turbo_mempool *pool) {
 #endif
     case TURBO_POOL_GENERIC:
         generic_pool_destroy(pool);
+        return;
+    default:
         return;
     }
 }

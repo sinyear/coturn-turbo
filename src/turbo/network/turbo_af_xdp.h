@@ -2,7 +2,7 @@
 #define TURBO_AF_XDP_H
 
 #include "turbo_netif.h"
-#include <xsk/xsk.h>
+#include <xdp/xsk.h>
 
 /* AF_XDP private data structure */
 struct turbo_afxdp_priv {
