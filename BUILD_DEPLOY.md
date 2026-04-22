@@ -43,7 +43,7 @@ yum install -y gcc gcc-c++ make openssl-devel libevent-devel libsqlite3-devel pk
 | 模式 | 额外依赖 | 内核要求 |
 |------|----------|----------|
 | 标准 TURN | 无 | 任意 Linux |
-| DPDK Turbo | DPDK ≥22.07、NUMA 库 | 无强制要求 |
+| DPDK Turbo | DPDK ≥26.03、NUMA 库 | 无强制要求 |
 | AF_XDP Turbo | libbpf、libxdp、libjson-c、clang/llvm | Linux ≥5.4（推荐 ≥5.10） |
 
 ---
@@ -82,10 +82,10 @@ sudo make install
 # 安装 DPDK 编译依赖
 apt-get install -y meson ninja-build libnuma-dev python3-pyelftools
 
-# 下载并编译 DPDK（推荐 22.07+）
-wget https://fast.dpdk.org/rel/dpdk-22.07.tar.xz
-tar xJf dpdk-22.07.tar.xz
-cd dpdk-22.07
+# 下载并编译 DPDK（推荐 26.03+）
+wget https://fast.dpdk.org/rel/dpdk-26.03.tar.xz
+tar xJf dpdk-26.03.tar.xz
+cd dpdk-26.03
 meson build --prefix=/usr --libdir=/usr/lib/x86_64-linux-gnu
 cd build
 ninja
@@ -111,7 +111,7 @@ make -j$(nproc)
 sudo make install
 ```
 
-> **关键**：`--turbo --use-dpdk` 是 configure 脚本的正式选项。脚本会自动检查 DPDK ≥22.07，通过后注入 `-DTURN_TURBO -DTURN_USE_DPDK` 到编译标志。Makefile 检测到这些宏后会编译 `turbo_dpdk.c` 并链接 `libdpdk`。
+> **关键**：`--turbo --use-dpdk` 是 configure 脚本的正式选项。脚本会自动检查 DPDK ≥26.03，通过后注入 `-DTURN_TURBO -DTURN_USE_DPDK` 到编译标志。Makefile 检测到这些宏后会编译 `turbo_dpdk.c` 并链接 `libdpdk`。
 
 ### 2.3 AF_XDP Turbo 模式
 
@@ -644,7 +644,7 @@ pkg-config --modversion libdpdk || echo "请先安装 DPDK（参见 2.2.1）"
 
 # 1. 安装 DPDK
 apt-get install -y meson ninja-build libnuma-dev
-# (下载编译 DPDK 22.07+，参见 2.2.1)
+# (下载编译 DPDK 26.03+，参见 2.2.1)
 
 # 2. 编译
 ./configure --turbo --use-dpdk

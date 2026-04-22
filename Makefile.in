@@ -40,13 +40,13 @@ TURBO_APP_MODS = src/apps/relay/turbo_core.c src/apps/relay/turbo_api.c src/apps
 # Conditional network backend source
 ifneq (,$(findstring TURN_USE_DPDK,${CFLAGS}))
 TURBO_NETWORK_BACKEND_MODS = src/turbo/network/turbo_dpdk.c
-TURBO_LDFLAGS = $(shell pkg-config --libs libdpdk 2>/dev/null || echo "")
+TURBO_LDFLAGS = $(shell pkg-config --libs libdpdk 2>/dev/null || echo "") -ljson-c
 else ifneq (,$(findstring TURN_USE_AFXDP,${CFLAGS}))
 TURBO_NETWORK_BACKEND_MODS = src/turbo/network/turbo_af_xdp.c
 TURBO_LDFLAGS =  -lbpf  -lxdp -ljson-c
 else
 TURBO_NETWORK_BACKEND_MODS =
-TURBO_LDFLAGS =
+TURBO_LDFLAGS = -ljson-c
 endif
 
 TURBO_MODS = ${TURBO_UTILS_MODS} ${TURBO_NETWORK_MODS} ${TURBO_FORWARD_MODS} ${TURBO_APP_MODS} ${TURBO_NETWORK_BACKEND_MODS}

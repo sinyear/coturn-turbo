@@ -22,7 +22,7 @@ static inline struct rte_mbuf* pkt_to_mbuf(struct turbo_packet *pkt) {
 }
 
 /* Convert rte_mbuf to turbo_packet */
-struct turbo_packet* mbuf_to_pkt(struct rte_mbuf *mbuf) {
+static struct turbo_packet* mbuf_to_pkt(struct rte_mbuf *mbuf) {
     struct turbo_packet *pkt = malloc(sizeof(struct turbo_packet));
     if (!pkt) return NULL;
 
@@ -62,9 +62,9 @@ static int turbo_dpdk_init(struct turbo_netif *netif, const char *ifname, uint16
     priv->port_id = RTE_MAX_ETHPORTS;
     for (uint16_t i = 0; i < RTE_MAX_ETHPORTS; i++) {
         if (rte_eth_dev_is_valid_port(i)) {
-            struct rte_eth_dev_info dev_info;
-            rte_eth_dev_info_get(i, &dev_info);
-            if (strcmp(dev_info.device->name, ifname) == 0) {
+            char port_name[RTE_ETH_NAME_MAX_LEN];
+            ret = rte_eth_dev_get_name_by_port(i, port_name);
+            if (ret == 0 && strcmp(port_name, ifname) == 0) {
                 priv->port_id = i;
                 break;
             }
@@ -86,7 +86,7 @@ static int turbo_dpdk_init(struct turbo_netif *netif, const char *ifname, uint16
     }
 
     /* Configure port with hardware checksum offload */
-    rte_eth_dev_info_get(priv->port_id, &dev_info);
+    (void)rte_eth_dev_info_get(priv->port_id, &dev_info);
     priv->nb_rx_queues = 1;
     priv->nb_tx_queues = 1;
 
@@ -203,6 +203,7 @@ static uint16_t turbo_dpdk_tx_burst(struct turbo_netif *netif, struct turbo_pack
 static struct turbo_packet* turbo_dpdk_alloc_pkt(struct turbo_netif *netif, size_t size) {
     struct turbo_dpdk_priv *priv = netif->priv;
     struct rte_mbuf *mbuf;
+    (void)size;
 
     mbuf = rte_pktmbuf_alloc(priv->mbuf_pool);
     if (!mbuf) {
@@ -213,6 +214,7 @@ static struct turbo_packet* turbo_dpdk_alloc_pkt(struct turbo_netif *netif, size
 }
 
 static void turbo_dpdk_free_pkt(struct turbo_netif *netif, struct turbo_packet *pkt) {
+    (void)netif;
     struct rte_mbuf *mbuf = pkt_to_mbuf(pkt);
     rte_pktmbuf_free(mbuf);
     free(pkt);
@@ -222,7 +224,7 @@ static struct turbo_packet* turbo_dpdk_clone_pkt(struct turbo_netif *netif, stru
     struct rte_mbuf *orig_mbuf = pkt_to_mbuf(pkt);
     struct rte_mbuf *new_mbuf;
 
-    new_mbuf = rte_pktmbuf_clone(orig_mbuf, netif->priv->mbuf_pool);
+    new_mbuf = rte_pktmbuf_clone(orig_mbuf, ((struct turbo_dpdk_priv*)netif->priv)->mbuf_pool);
     if (!new_mbuf) {
         return NULL;
     }

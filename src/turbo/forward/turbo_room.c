@@ -28,6 +28,8 @@
     free_fn(ptr); \
 } while (0)
 #define turbo_rte_qsbr_quiescent(qsbr, tid) rte_rcu_qsbr_quiescent(qsbr, tid)
+/* DPDK 22.11+ removed rte_rcu_qsbr_create/free; use static init + rte_free */
+#define TURBO_RCU_USE_STATIC_INIT 1
 #else
 #define turbo_rte_qsbr_defer(qsbr, free_fn, ptr) rte_rcu_qsbr_defer(qsbr, (void (*)(void*))(free_fn), ptr)
 #define turbo_rte_qsbr_quiescent(qsbr, tid) rte_rcu_qsbr_quiescent(qsbr, tid)
@@ -58,12 +60,30 @@ static int turbo_room_mgr_init_dpdk(struct turbo_room_mgr *mgr,
                                    uint32_t max_rooms, uint32_t max_members_per_room) {
     struct rte_hash_parameters hash_params = {0};
     char hash_name[32];
+    int ret;
 
-    /* Initialize RCU QSBR */
+    (void)max_members_per_room;
+
+#ifdef TURBO_RCU_USE_STATIC_INIT
+    /* DPDK 22.11+: use static initializer + rte_rcu_qsbr_init */
+    struct rte_rcu_qsbr *qsbr;
+    qsbr = rte_zmalloc("room_rcu", sizeof(struct rte_rcu_qsbr), 0);
+    if (!qsbr) {
+        return -ENOMEM;
+    }
+    ret = rte_rcu_qsbr_init(qsbr, RTE_MAX_LCORE);
+    if (ret < 0) {
+        rte_free(qsbr);
+        return -ENOMEM;
+    }
+    mgr->rcu = qsbr;
+#else
+    /* Older DPDK: use rte_rcu_qsbr_create */
     mgr->rcu = rte_rcu_qsbr_create("room_rcu", RTE_MAX_LCORE);
     if (!mgr->rcu) {
         return -ENOMEM;
     }
+#endif
 
     mgr->rcu_thread_id = turbo_rte_gettid();
 
@@ -78,7 +98,11 @@ static int turbo_room_mgr_init_dpdk(struct turbo_room_mgr *mgr,
 
     mgr->room_hash = rte_hash_create(&hash_params);
     if (!mgr->room_hash) {
+#ifdef TURBO_RCU_USE_STATIC_INIT
+        rte_free(mgr->rcu);
+#else
         rte_rcu_qsbr_free(mgr->rcu, RTE_MAX_LCORE);
+#endif
         return -ENOMEM;
     }
 
@@ -90,7 +114,11 @@ static void turbo_room_mgr_cleanup_dpdk(struct turbo_room_mgr *mgr) {
         rte_hash_free(mgr->room_hash);
     }
     if (mgr->rcu) {
+#ifdef TURBO_RCU_USE_STATIC_INIT
+        rte_free(mgr->rcu);
+#else
         rte_rcu_qsbr_free(mgr->rcu, RTE_MAX_LCORE);
+#endif
     }
 }
 

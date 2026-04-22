@@ -18,7 +18,7 @@ coturn-turbo 是基于 **coturn 4.10.0** 扩展的高性能 TURN-SFU 融合服�
 - **语言**：C11（turbo 部分使用 GNU99 扩展）
 - **构建系统**：主构建系统为 `configure` + `make`（兼容原生 coturn 的 CMake 备选方案）
 - **核心依赖**：libevent2、OpenSSL (≥1.1.1)
-- **Turbo 扩展依赖**：DPDK (≥22.07)、libbpf、libxdp (仅 AF_XDP 模式需要)
+- **Turbo 扩展依赖**：DPDK (≥26.03)、libbpf、libxdp (仅 AF_XDP 模式需要)
 
 ## 构建说明
 

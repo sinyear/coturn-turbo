@@ -163,6 +163,7 @@ static void* dpdk_pool_alloc(struct turbo_mempool *pool, size_t size) {
     if (!pool || !pool->priv) {
         return NULL;
     }
+    (void)size;
 
     struct dpdk_pool_priv *priv = (struct dpdk_pool_priv *)pool->priv;
     struct rte_mbuf *mbuf = rte_pktmbuf_alloc(priv->mbuf_pool);
@@ -180,7 +181,6 @@ static void dpdk_pool_free_buf(struct turbo_mempool *pool, void *buf) {
         return;
     }
 
-    struct dpdk_pool_priv *priv = (struct dpdk_pool_priv *)pool->priv;
     rte_pktmbuf_free((struct rte_mbuf *)buf);
     pool->used--;
     pool->free++;
