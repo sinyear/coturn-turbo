@@ -103,7 +103,8 @@ cd coturn-turbo
 
 # 生成 Makefile（configure 脚本会自动检查 DPDK 依赖）
 ./configure --turbo --use-dpdk
-
+# 生成 Makefile（加支持断点调试信息）
+./configure --turbo --use-dpdk  CFLAGS="-g -O0"
 # 编译
 make -j$(nproc)
 
@@ -134,6 +135,8 @@ cd coturn-turbo
 
 # 生成 Makefile（configure 脚本会自动检查 AF_XDP 依赖）
 ./configure --turbo --use-afxdp
+# 生成 Makefile（加支持断点调试信息）
+./configure --turbo --use-afxdp  CFLAGS="-g -O0"
 
 # 编译
 make -j$(nproc)
@@ -323,9 +326,35 @@ uname -r
 
 # 检查 XDP 支持
 ethtool -k eth0 | grep xdp
+
+# 检查 clang 是否可用（编译 XDP BPF 程序必需）
+clang --version
 ```
 
-#### 4.3.2 配置文件
+#### 4.3.2 XDP 模式选择
+
+AF_XDP 支持三种运行模式：
+
+| 模式 | 说明 | 性能 | 兼容性 |
+|------|------|------|--------|
+| `auto` | 自动检测：先尝试 DRV 原生零拷贝，失败降级 SKB | 最优 | 最佳 |
+| `drv` | XDP 驱动原生模式（真正的零拷贝） | 最高 | 需网卡驱动支持（Intel i40e/ice/ixgbe、Mellanox mlx5） |
+| `skb` | SKB 内核回退模式（通过内核协议栈） | 中等 | 几乎所有 Linux ≥5.4 |
+
+**重要：无论哪种模式，代码都会自动加载 XDP 过滤程序（`xdp_prog.o`）**，该程序仅将 TURN 端口的 UDP 流量 redirect 到 AF_XDP socket，其他流量（SSH、HTTP 等）正常进入内核协议栈，**不会导致断网**。
+
+配置方式：
+```ini
+# 在 turnserver.conf 中
+turbo-afxdp-mode=auto    # 默认值
+```
+
+或通过命令行：
+```bash
+sudo turnserver -c /etc/turnserver/turnserver.conf --turbo --turbo-afxdp-mode=auto -o -v
+```
+
+#### 4.3.3 配置文件
 
 编辑 `/etc/turnserver/turnserver.conf`：
 
@@ -334,29 +363,46 @@ listening-port=3478
 listening-ip=0.0.0.0
 relay-ip=0.0.0.0
 listening-device=eth0
-realm=northlt-cred-mech
+realm=north
+lt-cred-mech
 user=claude:password
 
 # Turbo 模式
 turbo=true
 turbo-api-port=9999
+
+# AF_XDP 模式选择（auto/drv/skb，默认 auto）
+turbo-afxdp-mode=auto
 ```
 
-#### 4.3.3 启动
+#### 4.3.4 启动
 
 ```bash
-# AF_XDP 模式需要 root 权限（加载 XDP 程序）
+# AF_XDP 模式需要 root 权限（加载 XDP BPF 程序）
 sudo turnserver -c /etc/turnserver/turnserver.conf --turbo -o -v
+
+# 显式指定模式
+sudo turnserver -c /etc/turnserver/turnserver.conf --turbo --turbo-afxdp-mode=drv -o -v
+sudo turnserver -c /etc/turnserver/turnserver.conf --turbo --turbo-afxdp-mode=skb -o -v
 ```
 
-#### 4.3.4 部署要求
+#### 4.3.5 部署要求
 
 | 维度 | 要求 |
 |------|------|
 | 内核 | Linux ≥5.4（推荐 ≥5.10） |
-| 网卡 | XDP 原生模式兼容（Intel i40e/ice/ixgbe、Mellanox mlx5） |
-| 网卡独占 | 无需，可与内核共享 |
+| 编译依赖 | clang（用于编译 `xdp_prog.c` → `xdp_prog.o`） |
+| 运行依赖 | libbpf、libxdp |
+| 网卡 | DRV 模式需驱动支持；SKB 模式兼容所有网卡 |
+| 网卡独占 | **否** — XDP 过滤程序仅 redirect TURN 流量，其他服务不受影响 |
 | 权限 | 需要 root 或 CAP_BPF + CAP_NET_ADMIN |
+
+#### 4.3.6 云服务器注意事项
+
+云服务器（如阿里云 ECS、腾讯云 CVM）的虚拟网卡（virtio/netvsc）通常**不支持原生 XDP（DRV 模式）**。使用 `auto` 模式会自动降级到 SKB 模式，无需手动配置。SKB 模式下：
+- XDP 程序仍会正确加载并过滤流量
+- SSH 和其他服务保持可达
+- 性能略低于 DRV 模式，但仍高于纯内核协议栈处理
 
 ### 4.4 Conductor 调度服务部署
 
@@ -538,7 +584,7 @@ curl -s "http://localhost:9999/v1/room/info?room_id=perf_test" | python3 -m json
 
 | 问题 | 解决方案 |
 |------|----------|
-| `Failed to initialize turbo network interface` | 检查 `af_xdp:` 前缀的具体错误输出；对于 DPDK：`dpdk-devbind.py --status` 确认网卡绑定到 vfio-pci |
+| `Failed to initialize turbo network interface` | 检查日志前缀的具体错误输出；对于 DPDK：`dpdk-devbind.py --status` 确认网卡绑定到 vfio-pci |
 | 大页内存不足 | `grep Huge /proc/meminfo`，增加 nr_hugepages |
 | EAL 初始化失败 | 确保以 root 运行，检查 IOMMU 是否在 BIOS 中启用 |
 | 启动崩溃（`turbo=true`） | 确认编译时使用了 `--turbo --use-dpdk`；通过 `ldd bin/turnserver \| grep dpdk` 验证 |
@@ -549,9 +595,11 @@ curl -s "http://localhost:9999/v1/room/info?room_id=perf_test" | python3 -m json
 |------|----------|
 | `Failed to initialize turbo network interface` + `interface 'xxx' not found` | 确认网卡名称正确：`ip link show` |
 | `Failed to initialize turbo network interface` + `xsk_umem__create failed` | 内存不足或权限不够，确保 root 运行 |
-| `Failed to initialize turbo network interface` + `xsk_socket__create failed` | 网卡不支持 XDP，检查驱动：`ethtool -k <网卡> \| grep xdp`；某些虚拟化网卡（如 virtio）不支持原生 XDP，尝试改用 SKB 模式 |
+| `Failed to initialize turbo network interface` + `xsk_socket__create_shared failed` | 网卡不支持 XDP，检查驱动：`ethtool -k <网卡> \| grep xdp`；某些虚拟化网卡（如 virtio）不支持原生 XDP，使用 `--turbo-afxdp-mode=skb` 强制 SKB 模式 |
+| `xdp program not found` | XDP BPF 程序未编译。确保 clang 已安装，重新运行 `make`；或手动编译：`clang -O2 -target bpf -c src/turbo/network/xdp_prog.c -o xdp_prog.o`，将结果放到 `/usr/share/turnserver/xdp_prog.o` |
 | XDP 程序加载失败 | 安装 libbpf-dev、libxdp-dev；确认内核 ≥5.4 |
 | 启动崩溃（`turbo=true`） | 确认编译时使用了 `--turbo --use-afxdp`；通过 `ldd bin/turnserver \| grep xdp` 验证 |
+| SSH 或其他服务断连 | 此问题在新代码中已修复（自动加载 XDP 过滤程序）。如仍发生，确认 `xdp_prog.o` 已正确安装到 `/usr/share/turnserver/` 目录 |
 
 **AF_XDP 详细排查步骤**：
 
@@ -564,13 +612,17 @@ ethtool -k enp2s0 | grep -i xdp
 
 # 3. 检查 XDP 模式支持情况
 #    如果 ethtool 显示 "off [fixed]"，说明是虚拟化网卡，不支持原生 XDP
-#    SKB 模式下大部分网卡都能工作，但性能较低
+#    使用 auto 模式会自动降级到 SKB，或手动指定 --turbo-afxdp-mode=skb
 
-# 4. 手动测试 AF_XDP socket 创建
+# 4. 确认 XDP 程序是否加载
+ip link show enp2s0
+# 应显示 "prog/xdp" 字样，表示 XDP 程序已附加
+
+# 5. 手动测试 AF_XDP socket 创建
 sudo ip link set dev enp2s0 xdp off  # 先清理残留
 sudo turnserver -c /etc/turnserver/turnserver.conf --turbo -V 2>&1 | grep af_xdp
 
-# 5. 如果仍失败，检查内核日志
+# 6. 如果仍失败，检查内核日志
 dmesg | tail -20
 
 # 6. 确认 libbpf/libxdp 链接正确
@@ -600,6 +652,7 @@ ldd bin/turnserver | grep -E "dpdk|bpf|xdp"
 |------|------|--------|--------|----------|------|
 | `turbo` | bool | false | `--turbo` | `turbo=true` | 启用 Turbo 模式。仅在编译时使用 `--turbo --use-dpdk` 或 `--turbo --use-afxdp` 时可设为 true |
 | `turbo-api-port` | uint16 | 0（禁用） | `--turbo-api-port <port>` | `turbo-api-port=<port>` | Turbo HTTP API 端口，提供房间管理 REST 接口 |
+| `turbo-afxdp-mode` | string | "auto" | `--turbo-afxdp-mode <mode>` | `turbo-afxdp-mode=<mode>` | AF_XDP 模式选择：auto（自动）、drv（原生零拷贝）、skb（内核回退）。仅 AF_XDP 后端有效 |
 | `listening-device` | string | "" | `-d <device>` | `listening-device=<name>` | Turbo 模式下指定网卡：DPDK 用端口 ID/PCI 地址，AF_XDP 用接口名 |
 
 ### 8.2 三种模式对比
@@ -615,6 +668,8 @@ ldd bin/turnserver | grep -E "dpdk|bpf|xdp"
 | 并发能力 | ~500-2000 流 | ~10,000+ 流 | ~5,000 流 |
 | P99 延迟 | ~200µs | ~30µs | ~60µs |
 | 网卡独占 | 否 | 是（绑定到 vfio-pci） | 否（与内核共享） |
+| XDP 模式 | N/A | N/A | auto/drv/skb（可配置） |
+| 流量过滤 | N/A | DPDK BPF/ACL | XDP BPF 程序（仅 redirect TURN 流量） |
 | 部署复杂度 | 低 | 高 | 中 |
 
 ### 8.3 配置文件位置
@@ -662,13 +717,20 @@ sudo turnserver -c /etc/turnserver/turnserver.conf --turbo --turbo-api-port 9999
 ### AF_XDP 模式一键启动
 
 ```bash
-# 1. 安装依赖
+# 1. 安装依赖（clang 用于编译 XDP BPF 程序）
 apt-get install -y clang llvm libbpf-dev libxdp-dev libjson-c-dev
 
-# 2. 编译
+# 2. 编译（会自动编译 xdp_prog.o）
 ./configure --turbo --use-afxdp
 make -j$(nproc) && sudo make install
 
-# 3. 启动
+# 3. 启动（auto 模式：自动选择 DRV 或降级 SKB，XDP 过滤程序自动加载）
 sudo turnserver -c /etc/turnserver/turnserver.conf --turbo --turbo-api-port 9999 -o -v
+
+# 4. 验证：检查 XDP 程序是否已加载
+ip link show eth0
+# 应显示 "prog/xdp" 字样
+
+# 5. 验证：其他服务应仍然可达
+ssh localhost  # SSH 不应被影响
 ```

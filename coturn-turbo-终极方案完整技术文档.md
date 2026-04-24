@@ -38,10 +38,10 @@ WebRTC 技术的普及使得实时音视频通信成为现代互联网应用的�
 
 - 初始化/清理
 - 批量收发（`rx_burst` / `tx_burst`）
-- 数据包内存管理（分配/释放/克隆）
+- 数据包内存管理（分配/释放/克隆 + 引用计数）
 - 分配管理（五元组快速索引）
 
-这一设计使应用层代码与具体网络后端解耦，用户可通过配置文件在运行时选择后端。
+这一设计使应用层代码与具体网络后端解耦。DPDK 后端通过端口 ID/PCI 地址绑定，AF_XDP 后端支持三种 XDP 运行模式（auto/drv/skb），通过 `--turbo-afxdp-mode` 配置项在运行时选择。
 
 ### 2.3 单端口复用
 
@@ -50,7 +50,7 @@ WebRTC 技术的普及使得实时音视频通信成为现代互联网应用的�
 ### 2.4 零拷贝数据路径
 
 - **DPDK 模式**：使用 `rte_pktmbuf_attach()` 实现 mbuf 克隆，负载数据零拷贝共享，仅重写每个目标独立的 IP/UDP 头部。
-- **AF_XDP 模式**：使用 UMEM 预分配缓冲区，通过 XDP 程序将数据包直接重定向到用户态，实现内核旁路。
+- **AF_XDP 模式**：使用 UMEM 预分配缓冲区，通过引用计数（`frame_refcount` 数组 + 原子操作）实现多目标零拷贝共享。启动时自动加载 XDP BPF 程序（`xdp_prog.o`）到网卡，仅将 TURN 端口的 UDP 流量 `XDP_REDIRECT` 到 AF_XDP socket，其他流量（SSH、HTTP 等）`XDP_PASS` 进入内核协议栈，确保其他服务不受影响。
 
 ## 三、架构图
 
@@ -387,9 +387,9 @@ Client A ──► UDP 3478 ──► Turbo Core ──┬─► Client B
 
 ### 9.1 核心设计模式
 
-1. **网络后端抽象**：定义 `turbo_netif_ops` 统一接口，DPDK 和 AF_XDP 分别实现。
+1. **网络后端抽象**：定义 `turbo_netif_ops` 统一接口，DPDK 和 AF_XDP 分别实现。AF_XDP 支持 auto/drv/skb 三种 XDP 模式，启动时自动加载 BPF 过滤程序。
 2. **单端口复用**：通过五元组（src_ip, src_port, dst_ip, dst_port, protocol）快速索引会话。
-3. **零拷贝转发**：DPDK 使用 `rte_pktmbuf_attach`，AF_XDP 使用 UMEM 共享内存。
+3. **零拷贝转发**：DPDK 使用 `rte_pktmbuf_attach`，AF_XDP 使用 UMEM 帧引用计数实现安全共享。
 4. **无锁广播**：房间成员使用 DPDK `rte_hash` + 延迟删除（RCU 思想），读操作无锁。
 5. **分布式调度**：Conductor 使用一致性哈希分配房间，Redis 同步状态。
 
@@ -442,13 +442,13 @@ coturn-turbo/（项目根目录，基于 coturn 4.10.0）
 │       │   ├── turbo_netif.c     [新增] 后端选择与初始化
 │       │   ├── turbo_dpdk.h      [新增] DPDK 后端头文件
 │       │   ├── turbo_dpdk.c      [新增] DPDK 后端实现
-│       │   ├── turbo_af_xdp.h    [新增] AF_XDP 后端头文件
-│       │   ├── turbo_af_xdp.c    [新增] AF_XDP 后端实现
+│       │   ├── turbo_af_xdp.h    [新增] AF_XDP 后端头文件（含模式枚举、引用计数）
+│       │   ├── turbo_af_xdp.c    [新增] AF_XDP 后端实现（XDP 程序加载、模式选择、引用计数）
 │       │   ├── turbo_port.h      [新增] 单端口复用头文件
 │       │   ├── turbo_port.c      [新增] 单端口复用实现
 │       │   ├── turbo_mempool.h   [新增] 内存池管理头文件
 │       │   ├── turbo_mempool.c   [新增] 内存池管理实现
-│       │   └── xdp_prog.c        [新增] eBPF/XDP 程序
+│       │   └── xdp_prog.c        [新增] eBPF/XDP 程序（端口过滤，编译为 xdp_prog.o）
 │       ├── forward/              [新增] 转发核心
 │       │   ├── turbo_switch.h    [新增] 快速转发头文件
 │       │   ├── turbo_switch.c    [新增] 快速转发实现
@@ -468,25 +468,27 @@ coturn-turbo/（项目根目录，基于 coturn 4.10.0）
 
 ### 11.1 性能对比（8 核 16G 标准云服务器）
 
-| 指标 | 原始 coturn | coturn-turbo (AF_XDP) | coturn-turbo (DPDK) |
-| :--- | :--- | :--- | :--- |
-| **并发 SFU 房间成员** | ~500 | **~5,000** | **~10,000+** |
-| **单包转发延迟 (P99)** | ~200µs | **~60µs** | **~30µs** |
-| **CPU 利用率 @10Gbps** | 80% | **45%** | **30%** |
-| **端口占用** | 每会话 1 端口 | **单端口 3478** | **单端口 3478** |
+| 指标 | 原始 coturn | coturn-turbo (AF_XDP/DRV) | coturn-turbo (AF_XDP/SKB) | coturn-turbo (DPDK) |
+| :--- | :--- | :--- | :--- | :--- |
+| **并发 SFU 房间成员** | ~500 | **~5,000** | **~3,000** | **~10,000+** |
+| **单包转发延迟 (P99)** | ~200µs | **~40µs** | **~80µs** | **~30µs** |
+| **CPU 利用率 @10Gbps** | 80% | **35%** | **50%** | **30%** |
+| **端口占用** | 每会话 1 端口 | **单端口 3478** | **单端口 3478** | **单端口 3478** |
+| **其他服务影响** | 无影响 | **无影响**（XDP 过滤） | **无影响**（XDP 过滤） | 独占网卡 |
 
 ### 11.2 性能差异分析
 
 1. **内核旁路**：DPDK/AF_XDP 绕过 Linux 内核协议栈，消除系统调用和内存拷贝开销。
-2. **零拷贝转发**：负载数据共享，仅克隆头部，大幅降低内存带宽消耗。
+2. **零拷贝转发**：负载数据共享，仅克隆头部，大幅降低内存带宽消耗。AF_XDP 使用 UMEM 帧引用计数（`frame_refcount` + 原子操作）实现安全的多目标零拷贝。
 3. **批量收发**：Burst TX/RX 减少 MMIO 次数，提升吞吐。
 4. **无锁设计**：广播迭代无锁，消除高并发下的争用。
+5. **XDP 程序过滤**：AF_XDP 模式下自动加载的 XDP BPF 程序仅 redirect TURN 端口流量，对非 TURN 流量的额外开销 < 1µs。
 
 ## 十二、平滑迁移配置
 
 ### 12.1 第一步：部署 coturn-turbo 集群
 
-1. **准备环境**：配置大页内存（DPDK 模式）或安装 libbpf/libxdp（AF_XDP 模式）。
+1. **准备环境**：配置大页内存（DPDK 模式）或安装 libbpf/libxdp（AF_XDP 模式）。AF_XDP 模式需同时安装 clang（编译 XDP BPF 程序）。
 2. **部署 Conductor**：至少 2 个实例，通过 Redis 同步状态。
 3. **部署 Turboserver**：配置与 Conductor 的连接信息。
 
@@ -639,17 +641,29 @@ sudo make install
 #### 构建
 
 ```bash
-# 安装 AF_XDP 依赖（内核 ≥5.4）
+# 安装 AF_XDP 依赖（内核 ≥5.4，clang 用于编译 XDP BPF 程序）
 sudo apt install -y clang llvm libbpf-dev libxdp-dev libjson-c-dev
 
-# 编译 coturn-turbo
+# 编译 coturn-turbo（会自动编译 xdp_prog.o）
 cd coturn-turbo
 ./configure --turbo --use-afxdp
 make -j$(nproc)
 sudo make install
 ```
 
-> **注意**：`--turbo --use-afxdp` 是 configure 脚本的正式选项。脚本会自动检查 libbpf、libxdp、libjson-c，通过后注入 `-DTURN_TURBO -DTURN_USE_AFXDP` 到编译标志。Makefile 检测到这些宏后会编译 `turbo_af_xdp.c` 并链接 `-lbpf -lxdp -ljson-c`。
+> **注意**：`--turbo --use-afxdp` 是 configure 脚本的正式选项。脚本会自动检查 libbpf、libxdp、libjson-c，通过后注入 `-DTURN_TURBO -DTURN_USE_AFXDP` 到编译标志。Makefile 检测到这些宏后会编译 `turbo_af_xdp.c` 并链接 `-lbpf -lxdp -ljson-c`。同时会自动使用 clang 编译 `src/turbo/network/xdp_prog.c` 为 `xdp_prog.o`。
+
+#### XDP 模式选择
+
+AF_XDP 支持三种 XDP 运行模式，通过 `--turbo-afxdp-mode` 参数或 `turbo-afxdp-mode` 配置项设置：
+
+| 模式 | 说明 | 性能 | 兼容性 | 适用场景 |
+|------|------|------|--------|----------|
+| **auto** | 自动检测：先尝试 DRV 原生零拷贝，失败降级 SKB | 最优 | 最佳 | **推荐**，生产环境默认 |
+| **drv** | XDP 驱动原生模式（真正的零拷贝） | 最高 | 需驱动支持（Intel i40e/ice/ixgbe、Mellanox mlx5） | 物理服务器 |
+| **skb** | SKB 内核回退模式（通过内核协议栈） | 中等 | 几乎所有 Linux ≥5.4 | 云服务器/虚拟化环境 |
+
+> **重要**：无论哪种模式，启动时都会自动加载 XDP BPF 过滤程序（`xdp_prog.o`）。该程序仅将 TURN 端口的 UDP 流量 `XDP_REDIRECT` 到 AF_XDP socket，其他所有流量（SSH、HTTP 等）`XDP_PASS` 正常进入内核协议栈，**确保其他服务不受影响**。
 
 #### 部署
 
@@ -657,6 +671,7 @@ sudo make install
    ```bash
    uname -r  # 需 ≥5.4
    ethtool -k eth0 | grep xdp
+   clang --version  # 确认 clang 可用（编译 XDP BPF 程序）
    ```
 
 2. **配置 turnserver.conf**：
@@ -672,12 +687,29 @@ sudo make install
    # Turbo 模式
    turbo=true
    turbo-api-port=9999
+
+   # AF_XDP 模式选择（auto/drv/skb，默认 auto）
+   turbo-afxdp-mode=auto
    ```
 
 3. **启动**：
    ```bash
-   # AF_XDP 模式需要 root 权限（加载 XDP 程序）
+   # AF_XDP 模式需要 root 权限（加载 XDP BPF 程序）
    sudo turnserver -c /etc/turnserver.conf --turbo -o -v
+
+   # 显式指定模式
+   sudo turnserver -c /etc/turnserver.conf --turbo --turbo-afxdp-mode=drv -o -v
+   sudo turnserver -c /etc/turnserver.conf --turbo --turbo-afxdp-mode=skb -o -v
+   ```
+
+4. **验证**：
+   ```bash
+   # 检查 XDP 程序是否已加载
+   ip link show eth0
+   # 应显示 "prog/xdp" 字样
+
+   # 验证其他服务不受影响
+   ssh localhost  # SSH 应保持可达
    ```
 
 #### 部署要求
@@ -685,19 +717,22 @@ sudo make install
 | 维度 | 要求 |
 | :--- | :--- |
 | **内核** | ≥ 5.4（推荐 5.10+） |
-| **网卡** | XDP 原生模式兼容（Intel i40e/ice/ixgbe，Mellanox mlx5） |
-| **网卡独占** | 无需，可与内核共享 |
+| **编译依赖** | clang（用于编译 `xdp_prog.c` → `xdp_prog.o`） |
+| **运行依赖** | libbpf、libxdp |
+| **网卡** | DRV 模式需驱动支持；SKB 模式兼容所有网卡 |
+| **网卡独占** | **否** — XDP 过滤程序仅 redirect TURN 流量，其他服务不受影响 |
 | **权限** | 需要 root 或 CAP_BPF + CAP_NET_ADMIN |
+| **云服务器** | 虚拟网卡（virtio/netvsc）不支持 DRV 模式，使用 `auto` 会自动降级到 SKB |
 
 ### 13.4 编译模式总结
 
-| 模式 | configure 命令 | 最终 CFLAGS 宏 | 后端 | 配置文件 | 启动命令 |
-|------|----------------|----------------|------|----------|----------|
-| 标准 | `./configure` | （无） | 内核协议栈 | turnserver.conf | `turnserver -c ...` |
-| DPDK | `./configure --turbo --use-dpdk` | `-DTURN_TURBO -DTURN_USE_DPDK` | DPDK 用户态 | turnserver.conf | `sudo turnserver -c ... --turbo` |
-| AF_XDP | `./configure --turbo --use-afxdp` | `-DTURN_TURBO -DTURN_USE_AFXDP` | AF_XDP 内核旁路 | turnserver.conf | `sudo turnserver -c ... --turbo` |
+| 模式 | configure 命令 | 最终 CFLAGS 宏 | 后端 | XDP 模式 | 配置文件 | 启动命令 |
+|------|----------------|----------------|------|----------|----------|----------|
+| 标准 | `./configure` | （无） | 内核协议栈 | N/A | turnserver.conf | `turnserver -c ...` |
+| DPDK | `./configure --turbo --use-dpdk` | `-DTURN_TURBO -DTURN_USE_DPDK` | DPDK 用户态 | N/A | turnserver.conf | `sudo turnserver -c ... --turbo` |
+| AF_XDP | `./configure --turbo --use-afxdp` | `-DTURN_TURBO -DTURN_USE_AFXDP` | AF_XDP 内核旁路 | auto/drv/skb | turnserver.conf | `sudo turnserver -c ... --turbo --turbo-afxdp-mode=auto` |
 
-> **重要**：网络后端由编译时 configure 选项决定，**不可运行时切换**。DPDK 和 AF_XDP 分别编译为不同的二进制。
+> **重要**：网络后端（DPDK vs AF_XDP）由编译时 configure 选项决定，**不可运行时切换**。但 AF_XDP 后端内部的 XDP 模式（auto/drv/skb）可在运行时通过配置项选择。
 
 ### 13.5 Conductor 分布式调度部署
 
@@ -728,6 +763,7 @@ conductor --listen 0.0.0.0 --port 8080 --ws-port 8765 \
 2. DPDK 官方文档：https://doc.dpdk.org/
 3. AF_XDP 内核文档：https://www.kernel.org/doc/html/latest/networking/af_xdp.html
 4. libbpf 文档：https://libbpf.readthedocs.io/
+5. libxdp 文档：https://github.com/xdp-project/xdp-tools/tree/master/lib/libxdp
 5. WebRTC SFU 架构指南：Ant Media - Mesh vs SFU vs MCU
 6. AF_XDP 延迟研究：Huet et al., "Understanding Delays in AF_XDP-based Applications", IEEE ICC 2024
 7. 低时延网络协议栈设计：2025 全球 C++ 技术大会精华

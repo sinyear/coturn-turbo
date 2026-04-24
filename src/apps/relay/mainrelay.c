@@ -249,7 +249,8 @@ turn_params_t turn_params = {
     false, /* include_reason_string */
 #if defined(TURN_TURBO)
     false, /* turbo_enabled */
-    0      /* turbo_api_port */
+    0,     /* turbo_api_port */
+    NULL   /* turbo_afxdp_mode */
 #endif
 };
 
@@ -1050,6 +1051,13 @@ static char Usage[] =
     "						Requires DPDK or AF_XDP support to be compiled in.\n"
     " --turbo-api-port		<port>		Port for the turbo room management HTTP API.\n"
     "						Default is 0 (disabled).\n"
+#if defined(TURN_USE_AFXDP)
+    " --turbo-afxdp-mode		<mode>		AF_XDP XDP mode selection (AF_XDP backend only).\n"
+    "						Values: auto (default), drv, skb.\n"
+    "						auto: try DRV (native zero-copy), fallback to SKB.\n"
+    "						drv:  force DRV mode (requires driver XDP support).\n"
+    "						skb:  force SKB mode (kernel fallback, highest compatibility).\n"
+#endif
     " --min-port			<port>		Lower bound of the UDP port range for relay endpoints "
     "allocation.\n"
     "						Default value is 49152, according to RFC 5766.\n"
@@ -1551,6 +1559,9 @@ enum EXTRA_OPTS {
 #if defined(TURN_TURBO)
   TURBO_OPT,
   TURBO_API_PORT_OPT
+#if defined(TURN_USE_AFXDP)
+  ,TURBO_AFXDP_MODE_OPT
+#endif
 #endif
 };
 
@@ -1706,6 +1717,9 @@ static const struct myoption long_options[] = {
 #if defined(TURN_TURBO)
     {"turbo", optional_argument, NULL, TURBO_OPT},
     {"turbo-api-port", required_argument, NULL, TURBO_API_PORT_OPT},
+#if defined(TURN_USE_AFXDP)
+    {"turbo-afxdp-mode", required_argument, NULL, TURBO_AFXDP_MODE_OPT},
+#endif
 #endif
     {NULL, no_argument, NULL, 0}};
 
@@ -2524,6 +2538,11 @@ static void set_option(int c, char *value) {
   case TURBO_API_PORT_OPT:
     turn_params.turbo_api_port = (uint16_t)atoi(value);
     break;
+#if defined(TURN_USE_AFXDP)
+  case TURBO_AFXDP_MODE_OPT:
+    turn_params.turbo_afxdp_mode = strdup(value);
+    break;
+#endif
 #endif
   default:
     fprintf(stderr, "\n%s\n", Usage);
@@ -3475,6 +3494,14 @@ int main(int argc, char **argv) {
   // Initialize turbo components
   if (turn_params.turbo_enabled) {
     TURN_LOG_FUNC(TURN_LOG_LEVEL_INFO, "Initializing TURBO components...\n");
+
+#if defined(TURN_USE_AFXDP)
+    // Pass AF_XDP mode to the backend via environment variable
+    if (turn_params.turbo_afxdp_mode && turn_params.turbo_afxdp_mode[0]) {
+      setenv("TURBO_AFXDP_MODE", turn_params.turbo_afxdp_mode, 1);
+      TURN_LOG_FUNC(TURN_LOG_LEVEL_INFO, "AF_XDP mode set to: %s\n", turn_params.turbo_afxdp_mode);
+    }
+#endif
 
     // Initialize network backend (reuse listener_ifname from -d/--listening-device)
     turbo_netif = turbo_netif_init(turn_params.listener_ifname, turn_params.listener_port);

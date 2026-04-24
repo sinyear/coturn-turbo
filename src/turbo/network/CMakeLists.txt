@@ -80,7 +80,7 @@ if(TURN_USE_AFXDP)
 
         add_custom_command(
             OUTPUT ${XDP_PROG_OUTPUT}
-            COMMAND ${CLANG} -O2 -target bpf -c
+            COMMAND ${CLANG} -O2 -target bpf -I/usr/include -c
                     ${XDP_PROG_SOURCE}
                     -o ${XDP_PROG_OUTPUT}
             DEPENDS ${XDP_PROG_SOURCE}
@@ -88,8 +88,14 @@ if(TURN_USE_AFXDP)
             VERBATIM
         )
         add_custom_target(xdp_prog ALL DEPENDS ${XDP_PROG_OUTPUT})
+
+        # Install to /usr/share/turnserver/ where turbo_afxdp_init() searches for it
         install(FILES ${XDP_PROG_OUTPUT} DESTINATION share/turnserver OPTIONAL)
     else()
-        message(WARNING "clang not found - XDP BPF program will not be compiled")
+        message(WARNING
+            "clang not found — XDP BPF program will not be compiled. "
+            "AF_XDP mode requires xdp_prog.o for packet filtering. "
+            "Without it, the AF_XDP socket will capture ALL traffic on the bound queue, "
+            "causing SSH and other services to become unreachable.")
     endif()
 endif()

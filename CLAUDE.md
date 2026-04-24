@@ -62,6 +62,7 @@ make -j$(nproc)
 ### Turbo AF_XDP 模式构建
 
 ```bash
+# 需要 clang 编译 XDP BPF 程序（xdp_prog.c → xdp_prog.o）
 ./configure --turbo --use-afxdp
 make -j$(nproc)
 ```
@@ -229,6 +230,8 @@ coturn-turbo/
 
 - **数据平面加速**：在 `netengine.c` 的 UDP 接收路径插入 Turbo 快速路径。若收到的数据包属于某个已关联房间的分配（allocation），则绕过原有逐包中继逻辑，直接进入 SFU 广播流水线。
 - **网络后端抽象**：定义 `turbo_netif_ops` 统一接口，运行时通过配置选择 DPDK 或 AF_XDP 后端，实现内核旁路、批量收发及零拷贝。
+- **AF_XDP XDP 模式选择**：AF_XDP 后端支持三种模式——`auto`（自动检测 DRV/SKB）、`drv`（XDP 驱动原生零拷贝）、`skb`（SKB 内核回退）。通过 `--turbo-afxdp-mode` 参数或 `turbo-afxdp-mode` 配置项设置。
+- **XDP 程序自动加载**：AF_XDP 初始化时自动加载 `xdp_prog.o`（BPF 程序）到网卡，仅将 TURN 端口的 UDP 流量 redirect 到 AF_XDP socket，其他流量（SSH、HTTP 等）正常进入内核协议栈，确保其他服务不受影响。
 - **单端口复用**：所有客户端媒体流收敛至 UDP 3478 单一端口，通过五元组（源 IP、源端口、目的 IP、目的端口、协议）进行 O(1) 会话查找，替代原生 coturn 的多端口分配模式。
 - **房间与广播**：`turbo_room_mgr` 维护无锁成员表（基于 DPDK `rte_hash` 或自研哈希表），广播时对每个目标成员克隆数据包头部并重写地址，负载数据共享（零拷贝）。
 - **分布式调度**：Conductor 服务通过一致性哈希将房间映射至特定的 Turboserver 节点，并通过 Redis 同步全局状态，实现集群的水平扩展。
@@ -246,7 +249,7 @@ coturn-turbo/
 
 - **五元组查找**：所有快速路径入口必须先从数据包提取五元组，在全局 `turbo_port_map` 中查找对应的 `turbo_allocation`，查找失败则回退到原生 STUN/TURN 处理流程。
 - **房间成员迭代安全**：广播遍历房间成员时，采用 RCU 风格的延迟删除机制——删除成员时先标记删除，待所有正在进行的广播迭代完成后再释放资源，避免使用锁。
-- **数据包克隆**：DPDK 后端使用 `rte_pktmbuf_attach()` 克隆 mbuf，AF_XDP 后端使用预分配的 UMEM 缓冲区配合 `memcpy` 或引用计数实现共享。克隆后必须单独重写每个目标的 IP/UDP 头部。
+- **数据包克隆**：DPDK 后端使用 `rte_pktmbuf_attach()` 克隆 mbuf，AF_XDP 后端使用 UMEM 帧引用计数实现零拷贝共享。克隆后必须单独重写每个目标的 IP/UDP 头部。AF_XDP 的 `frame_refcount` 数组管理每个 UMEM 帧的生命周期，引用计数归零时帧才归还到 fill queue。
 - **大页内存要求**：DPDK 模式必须预先配置大页；AF_XDP 模式建议配置大页以获得最佳性能。部署脚本应自动检查 `/proc/meminfo` 中的 `HugePages_Total`。
 - **API 设计**：新增的 HTTP API（`/v1/room/*`）遵循 RESTful 风格，请求/响应体使用 JSON 格式，错误码遵循 HTTP 标准。
 

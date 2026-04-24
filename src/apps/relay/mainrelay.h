@@ -375,6 +375,7 @@ typedef struct _turn_params_ {
 #if defined(TURN_TURBO)
   bool turbo_enabled;
   uint16_t turbo_api_port;
+  char *turbo_afxdp_mode;  /* "auto", "drv", or "skb" — only meaningful with AF_XDP backend */
 #endif
 } turn_params_t;
 
