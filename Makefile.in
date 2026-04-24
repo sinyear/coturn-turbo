@@ -63,7 +63,7 @@ XDP_PROG_O = src/turbo/network/xdp_prog.o
 CLANG ?= clang
 
 $(XDP_PROG_O): src/turbo/network/xdp_prog.c
-	$(CLANG) -O2 -target bpf -I/usr/include -c $< -o $@
+	$(CLANG) -O2 -target bpf -g -I/usr/include -c $< -o $@
 
 # Build XDP program as part of the default target
 TURN_BUILD_RESULTS += $(XDP_PROG_O)

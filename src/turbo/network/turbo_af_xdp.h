@@ -72,6 +72,7 @@ struct turbo_afxdp_priv {
 	enum afxdp_mode mode;               /* Actual resolved mode (DRV or SKB) */
 	uint16_t target_port;               /* Port for XDP filtering */
 	int xdp_prog_fd;                    /* XDP program file descriptor */
+	int ifindex;                        /* Network interface index for detach */
 };
 
 /* AF_XDP frame structure */
