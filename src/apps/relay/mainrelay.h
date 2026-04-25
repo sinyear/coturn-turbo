@@ -96,6 +96,11 @@
 
 #include <openssl/modes.h>
 
+#if defined(TURN_TURBO)
+#include "../../turbo/network/turbo_netif.h"
+#include "../../turbo/forward/turbo_room.h"
+#endif
+
 #if !defined(TURN_NO_SYSTEMD)
 #include <systemd/sd-daemon.h>
 #endif
@@ -362,6 +367,12 @@ typedef struct _turn_params_ {
   bool drop_invalid_packets_log;
   bool udp_recvmmsg;
   bool include_reason_string;
+
+#if defined(TURN_TURBO)
+  bool turbo_enabled;
+  uint16_t turbo_api_port;
+  char *turbo_afxdp_mode;  /* "auto", "drv", or "skb" — only meaningful with AF_XDP backend */
+#endif
 } turn_params_t;
 
 extern turn_params_t turn_params;
@@ -435,6 +446,11 @@ int init_ctr(struct ctr_state *state, const unsigned char iv[8]);
 
 void increment_global_allocation_count(void);
 void decrement_global_allocation_count(void);
+
+#if defined(TURN_TURBO)
+extern struct turbo_netif *turbo_netif;
+extern struct turbo_room_mgr *turbo_room_mgr;
+#endif
 
 #ifdef __cplusplus
 }

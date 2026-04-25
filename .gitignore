@@ -6,6 +6,9 @@ lib
 sqlite
 examples/ca/CA.pl
 .vscode
+.claude
+.qodo
+.github
 .idea
 .vs/
 

@@ -614,6 +614,10 @@ int turn_session_info_copy_from(struct turn_session_info *tsi, ts_ur_super_sessi
       }
     }
 
+#if defined(TURN_TURBO)
+    tsi->room_id = ss->room_id;
+#endif
+
     ret = 0;
   }
 

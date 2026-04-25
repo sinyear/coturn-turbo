@@ -37,6 +37,7 @@
 #define _GNU_SOURCE
 #endif
 
+#define _GNU_SOURCE
 #include "apputils.h"
 #include "mainrelay.h"
 #include <errno.h>
@@ -47,8 +48,13 @@
 #include "ns_turn_openssl.h"
 #include "prom_server.h"
 
+#if defined(TURN_TURBO)
+#include "../../turbo/forward/turbo_room.h"
+#endif
+
 #include <pthread.h>
 #include <stdint.h>
+
 
 /* #define REQUEST_CLIENT_CERT */
 
@@ -445,6 +451,27 @@ static int handle_udp_packet(dtls_listener_relay_server_type *server, struct mes
 
     if (s && ioa_socket_check_bandwidth(s, sm->m.sm.nd.nbh, 1)) {
       s->e = ioa_eng;
+      /* Turbo fast path: check if session belongs to a room */
+#if defined(TURN_TURBO)
+      if (turn_params.turbo_enabled && turbo_room_mgr && s->session) {
+        ts_ur_super_session *ss = (ts_ur_super_session *)s->session;
+        if (ss->room_id > 0) {
+          struct turbo_packet pkt;
+          pkt.data = ioa_network_buffer_data(sm->m.sm.nd.nbh);
+          pkt.len = ioa_network_buffer_get_size(sm->m.sm.nd.nbh);
+          pkt.buf_len = ioa_network_buffer_get_size(sm->m.sm.nd.nbh);
+          pkt.priv = NULL;
+
+          int sent = turbo_room_broadcast(turbo_room_mgr, ss->room_id, ss->id, &pkt);
+          if (sent > 0) {
+            TURN_LOG_FUNC(TURN_LOG_LEVEL_DEBUG,
+                "turbo: fast path broadcast to %d members, room=%u, session=%llu\n",
+                sent, ss->room_id, (unsigned long long)ss->id);
+            /* Media forwarded via turbo; still process STUN signaling below */
+          }
+        }
+      }
+#endif
       if (s && s->read_cb && sm->m.sm.nd.nbh) {
         s->read_cb(s, IOA_EV_READ, &(sm->m.sm.nd), s->read_ctx, 1);
         ioa_network_buffer_delete(ioa_eng, sm->m.sm.nd.nbh);

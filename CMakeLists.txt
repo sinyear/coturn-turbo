@@ -137,6 +137,17 @@ ADD_CUSTOM_TARGET(uninstall
 
 add_subdirectory(src)
 
+# Propagate turbo compile definitions to all targets
+if(TURN_TURBO)
+    add_compile_definitions(TURN_TURBO)
+    if(TURN_USE_DPDK)
+        add_compile_definitions(TURN_USE_DPDK)
+    endif()
+    if(TURN_USE_AFXDP)
+        add_compile_definitions(TURN_USE_AFXDP)
+    endif()
+endif()
+
 CONFIGURE_FILE(
     "${CMAKE_SOURCE_DIR}/cmake/coturnConfig.cmake.in"
     "${CMAKE_BINARY_DIR}/coturnConfig.cmake"
@@ -188,4 +199,14 @@ option(BUILD_TESTING "Build unit tests" OFF)
 if(BUILD_TESTING)
     enable_testing()
     add_subdirectory(tests)
+# Turbo extensions options
+option(TURN_TURBO "Enable TURBO extensions" OFF)
+option(TURN_USE_DPDK "Use DPDK network backend" OFF)
+option(TURN_USE_AFXDP "Use AF_XDP network backend" OFF)
+
+# Validate turbo options
+if(TURN_TURBO)
+    if(NOT TURN_USE_DPDK AND NOT TURN_USE_AFXDP)
+        message(FATAL_ERROR "TURN_TURBO requires at least one backend: TURN_USE_DPDK or TURN_USE_AFXDP")
+    endif()
 endif()
