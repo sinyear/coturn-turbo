@@ -21,14 +21,10 @@ target_link_libraries(turbo_forward turbo_network)
 # Include directories
 target_include_directories(turbo_forward PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}
-    ${CMAKE_CURRENT_SOURCE_DIR}/../network
+    ${CMAKE_CURRENT_SOURCE_DIR}/../netif
+    ${CMAKE_CURRENT_SOURCE_DIR}/../common
 )
 
-# Set compile definitions
-if(TURN_USE_DPDK)
-    target_compile_definitions(turbo_forward PRIVATE TURN_USE_DPDK)
-endif()
-
-if(TURN_USE_AFXDP)
-    target_compile_definitions(turbo_forward PRIVATE TURN_USE_AFXDP)
+if(TURBO_AFXDP)
+    target_compile_definitions(turbo_forward PRIVATE TURBO_AFXDP)
 endif()

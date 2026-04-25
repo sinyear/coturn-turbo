@@ -9,11 +9,11 @@
  */
 
 #include "turbo_api.h"
-#include "mainrelay.h"
-#include "ns_turn_utils.h"
+#include "../../apps/relay/mainrelay.h"
+#include "../../apps/common/ns_turn_utils.h"
 
-#if defined(TURN_TURBO)
-#include "../../turbo/forward/turbo_room.h"
+#if defined(TURBO_FEATURES)
+#include "../forward/turbo_room.h"
 #endif
 
 #include <event2/event.h>
@@ -24,11 +24,8 @@
 #include <string.h>
 #include <stdatomic.h>
 #include <arpa/inet.h>
-#include "turbo_json.h"
+#include "../common/turbo_json.h"
 
-#ifdef TURN_USE_DPDK
-#include <rte_hash.h>
-#endif
 
 static struct evhttp *turbo_http_server = NULL;
 static struct event_base *turbo_event_base = NULL;
@@ -274,24 +271,6 @@ static void turbo_api_room_list(struct evhttp_request *req, void *arg) {
     struct json_object *rooms = json_object_new_array();
 
     /* Iterate through rooms */
-#ifdef TURN_USE_DPDK
-    /* DPDK: iterate hash table with rte_hash_iterate */
-    if (turbo_room_mgr && turbo_room_mgr->room_hash) {
-        const void *key;
-        void *data;
-        uint32_t next = 0;
-        int32_t idx;
-        while ((idx = rte_hash_iterate(turbo_room_mgr->room_hash, &key, &data, &next)) >= 0) {
-            struct turbo_room *room = (struct turbo_room *)data;
-            if (!room->marked_for_delete) {
-                struct json_object *r = json_object_new_object();
-                json_object_object_add(r, "room_id", json_object_new_int(room->room_id));
-                json_object_object_add(r, "member_count", json_object_new_int(room->member_count));
-                json_object_array_add(rooms, r);
-            }
-        }
-    }
-#else
     for (uint32_t i = 0; i < turbo_room_mgr->room_hash.num_buckets; i++) {
         struct turbo_room *room = turbo_room_mgr->room_hash.buckets[i];
         while (room) {
@@ -304,7 +283,6 @@ static void turbo_api_room_list(struct evhttp_request *req, void *arg) {
             room = room->next;
         }
     }
-#endif
 
     json_object_object_add(resp, "rooms", rooms);
     json_object_object_add(resp, "total", json_object_new_int(json_object_array_length(rooms)));

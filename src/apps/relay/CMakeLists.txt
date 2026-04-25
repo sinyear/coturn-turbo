@@ -163,29 +163,34 @@ message("turnserver_LIBS:${turnserver_LIBS}")
 add_executable(${PROJECT_NAME} ${SOURCE_FILES} ${HEADER_FILES})
 target_link_libraries(${PROJECT_NAME} PRIVATE turn_server ${turnserver_LIBS})
 target_include_directories(${PROJECT_NAME} PRIVATE ${turnserver_include_dirs}
-    ${CMAKE_SOURCE_DIR}/turbo/network
-    ${CMAKE_SOURCE_DIR}/turbo/forward
-    ${CMAKE_SOURCE_DIR}/turbo/utils
+    ${CMAKE_SOURCE_DIR}/src/turbo/netif
+    ${CMAKE_SOURCE_DIR}/src/turbo/forward
+    ${CMAKE_SOURCE_DIR}/src/turbo/common
+    ${CMAKE_SOURCE_DIR}/src/turbo/api
+    ${CMAKE_SOURCE_DIR}/src/turbo
 )
 target_compile_definitions(${PROJECT_NAME} PRIVATE ${turnserver_DEFINED})
 
 # Turbo extensions
-if(TURN_TURBO)
-    list(APPEND turnserver_DEFINED TURN_TURBO)
-    target_sources(${PROJECT_NAME} PRIVATE turbo_api.c turbo_api.h turbo_core.c turbo_core.h turbo_forward.c turbo_forward.h)
+if(TURBO_FEATURES)
+    list(APPEND turnserver_DEFINED TURBO_FEATURES)
+    target_sources(${PROJECT_NAME} PRIVATE turbo_api.c turbo_api.h)
     target_link_libraries(${PROJECT_NAME} PRIVATE turbo_network turbo_forward turbo_utils)
-    if(TURN_USE_DPDK)
-        list(APPEND turnserver_DEFINED TURN_USE_DPDK)
-        pkg_check_modules(DPDK REQUIRED libdpdk)
-        target_include_directories(${PROJECT_NAME} PRIVATE ${DPDK_INCLUDE_DIRS})
-        target_link_libraries(${PROJECT_NAME} PRIVATE ${DPDK_LIBRARIES})
+    if(TURBO_IOURING)
+        list(APPEND turnserver_DEFINED TURBO_IOURING)
+        pkg_check_modules(LIBURING REQUIRED liburing>=2.0)
+        target_include_directories(${PROJECT_NAME} PRIVATE ${LIBURING_INCLUDE_DIRS})
+        target_link_libraries(${PROJECT_NAME} PRIVATE ${LIBURING_LIBRARIES})
     endif()
-    if(TURN_USE_AFXDP)
-        list(APPEND turnserver_DEFINED TURN_USE_AFXDP)
+    if(TURBO_AFXDP)
+        list(APPEND turnserver_DEFINED TURBO_AFXDP)
         pkg_check_modules(LIBBPF REQUIRED libbpf)
         pkg_check_modules(LIBXDP REQUIRED libxdp)
         target_include_directories(${PROJECT_NAME} PRIVATE ${LIBBPF_INCLUDE_DIRS} ${LIBXDP_INCLUDE_DIRS})
         target_link_libraries(${PROJECT_NAME} PRIVATE ${LIBBPF_LIBRARIES} ${LIBXDP_LIBRARIES})
+    endif()
+    if(TURBO_ROOMS)
+        list(APPEND turnserver_DEFINED TURBO_ROOMS)
     endif()
     # JSON-C for turbo API
     pkg_check_modules(JSONC REQUIRED json-c)

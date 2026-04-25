@@ -4,13 +4,9 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <netinet/in.h>
-#include "../network/turbo_netif.h"
-#include "../network/turbo_port.h"
+#include "../netif/turbo_netif.h"
+#include "../netif/turbo_port.h"
 
-#ifdef TURN_USE_DPDK
-#include <rte_hash.h>
-#include <rte_rcu_qsbr.h>
-#endif
 
 /* Forward declarations */
 struct turbo_room_mgr;
@@ -45,18 +41,12 @@ struct turbo_room {
 struct turbo_room_mgr {
     struct turbo_netif *netif;      /* Network interface */
 
-#ifdef TURN_USE_DPDK
-    struct rte_hash *room_hash;     /* DPDK hash table for rooms */
-    struct rte_rcu_qsbr *rcu;       /* RCU QSBR for safe memory reclamation */
-    uint32_t rcu_thread_id;         /* RCU thread ID */
-#else
     /* Custom lock-free hash table implementation */
     struct {
         struct turbo_room **buckets;
         uint32_t num_buckets;
         uint32_t hash_seed;
     } room_hash;
-#endif
 
     struct turbo_room *rooms;       /* Global room list */
     uint32_t max_rooms;             /* Maximum number of rooms */

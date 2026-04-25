@@ -2,7 +2,7 @@
 #define TURBO_PORT_H
 
 #include "turbo_netif.h"
-#include "../utils/turbo_rcu.h"
+#include "../common/turbo_rcu.h"
 #include <stdint.h>
 #include <netinet/in.h>
 #include <pthread.h>

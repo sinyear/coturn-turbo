@@ -2,11 +2,8 @@
 # Turbo Extensions
 ##
 
-# Add network backend library
-add_subdirectory(network)
-
-# Add forward library
+add_subdirectory(netif)
 add_subdirectory(forward)
-
-# Add utils library
-add_subdirectory(utils)
+add_subdirectory(common)
+add_subdirectory(api)
+# room/ is populated in Phase 4; forward to avoid missing targets now

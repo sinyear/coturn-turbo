@@ -111,111 +111,12 @@ static void generic_pool_destroy(struct turbo_mempool *pool) {
     free(pool);
 }
 
-/* ============================================================
- * DPDK backend (conditional)
- * ============================================================ */
-
-#ifdef TURN_USE_DPDK
-
-#include <rte_mempool.h>
-#include <rte_mbuf.h>
-
-struct dpdk_pool_priv {
-    struct rte_mempool *mbuf_pool;
-    size_t buf_size;
-};
-
-struct turbo_mempool* turbo_mempool_create_dpdk(const char *name,
-                                                 uint32_t nb_mbufs,
-                                                 size_t buf_size,
-                                                 unsigned int socket_id) {
-    struct turbo_mempool *pool = (struct turbo_mempool *)calloc(1, sizeof(*pool));
-    if (!pool) {
-        return NULL;
-    }
-
-    struct dpdk_pool_priv *priv = (struct dpdk_pool_priv *)calloc(1, sizeof(*priv));
-    if (!priv) {
-        free(pool);
-        return NULL;
-    }
-
-    /* Create DPDK mbuf pool */
-    priv->mbuf_pool = rte_pktmbuf_pool_create(name, nb_mbufs, 256, 0,
-                                               (uint16_t)(buf_size > 2048 ? 2048 : buf_size),
-                                               socket_id);
-    if (!priv->mbuf_pool) {
-        free(priv);
-        free(pool);
-        return NULL;
-    }
-
-    pool->type = TURBO_POOL_DPDK;
-    pool->total = nb_mbufs;
-    pool->free = nb_mbufs;
-    pool->buf_size = buf_size;
-    pool->priv = priv;
-
-    return pool;
-}
-
-static void* dpdk_pool_alloc(struct turbo_mempool *pool, size_t size) {
-    if (!pool || !pool->priv) {
-        return NULL;
-    }
-    (void)size;
-
-    struct dpdk_pool_priv *priv = (struct dpdk_pool_priv *)pool->priv;
-    struct rte_mbuf *mbuf = rte_pktmbuf_alloc(priv->mbuf_pool);
-    if (!mbuf) {
-        return NULL;
-    }
-
-    pool->used++;
-    pool->free--;
-    return mbuf;
-}
-
-static void dpdk_pool_free_buf(struct turbo_mempool *pool, void *buf) {
-    if (!pool || !buf) {
-        return;
-    }
-
-    rte_pktmbuf_free((struct rte_mbuf *)buf);
-    pool->used--;
-    pool->free++;
-}
-
-static void dpdk_pool_destroy(struct turbo_mempool *pool) {
-    if (!pool) {
-        return;
-    }
-
-    struct dpdk_pool_priv *priv = (struct dpdk_pool_priv *)pool->priv;
-    if (priv && priv->mbuf_pool) {
-        rte_mempool_free(priv->mbuf_pool);
-    }
-    free(priv);
-    free(pool);
-}
-
-#else /* !TURN_USE_DPDK */
-
-struct turbo_mempool* turbo_mempool_create_dpdk(const char *name,
-                                                 uint32_t nb_mbufs,
-                                                 size_t buf_size,
-                                                 unsigned int socket_id) {
-    (void)name; (void)nb_mbufs; (void)buf_size; (void)socket_id;
-    return NULL;
-}
-
-#endif /* TURN_USE_DPDK */
 
 /* ============================================================
  * AF_XDP backend (conditional)
  * ============================================================ */
 
-#ifdef TURN_USE_AFXDP
+#ifdef TURBO_AFXDP
 
 #include <xdp/xsk.h>
 
@@ -334,14 +235,14 @@ static void afxdp_pool_destroy(struct turbo_mempool *pool) {
     free(pool);
 }
 
-#else /* !TURN_USE_AFXDP */
+#else /* !TURBO_AFXDP */
 
 struct turbo_mempool* turbo_mempool_create_afxdp(uint32_t num_frames, size_t frame_size) {
     (void)num_frames; (void)frame_size;
     return NULL;
 }
 
-#endif /* TURN_USE_AFXDP */
+#endif /* TURBO_AFXDP */
 
 /* ============================================================
  * Public API (backend-agnostic)
@@ -353,11 +254,8 @@ void* turbo_mempool_alloc(struct turbo_mempool *pool, size_t size) {
     }
 
     switch (pool->type) {
-#ifdef TURN_USE_DPDK
-    case TURBO_POOL_DPDK:
-        return dpdk_pool_alloc(pool, size);
-#endif
-#ifdef TURN_USE_AFXDP
+
+#ifdef TURBO_AFXDP
     case TURBO_POOL_AFXDP:
         return afxdp_pool_alloc(pool, size);
 #endif
@@ -374,12 +272,8 @@ void turbo_mempool_free(struct turbo_mempool *pool, void *buf) {
     }
 
     switch (pool->type) {
-#ifdef TURN_USE_DPDK
-    case TURBO_POOL_DPDK:
-        dpdk_pool_free_buf(pool, buf);
-        return;
-#endif
-#ifdef TURN_USE_AFXDP
+
+#ifdef TURBO_AFXDP
     case TURBO_POOL_AFXDP:
         afxdp_pool_free_buf(pool, buf);
         return;
@@ -408,12 +302,8 @@ void turbo_mempool_destroy(struct turbo_mempool *pool) {
     }
 
     switch (pool->type) {
-#ifdef TURN_USE_DPDK
-    case TURBO_POOL_DPDK:
-        dpdk_pool_destroy(pool);
-        return;
-#endif
-#ifdef TURN_USE_AFXDP
+
+#ifdef TURBO_AFXDP
     case TURBO_POOL_AFXDP:
         afxdp_pool_destroy(pool);
         return;

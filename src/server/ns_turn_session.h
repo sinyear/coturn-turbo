@@ -123,7 +123,7 @@ struct _ts_ur_super_session {
   char s_mobile_id[33];
   /* Bandwidth */
   band_limit_t bps;
-#if defined(TURN_TURBO)
+#if defined(TURBO_FEATURES)
   /* Turbo SFU */
   uint32_t room_id; /* 0 = not in a room */
 #endif
@@ -181,7 +181,7 @@ struct turn_session_info {
   char origin[STUN_MAX_ORIGIN_SIZE + 1];
   /* Bandwidth */
   band_limit_t bps;
-#if defined(TURN_TURBO)
+#if defined(TURBO_FEATURES)
   /* Turbo SFU */
   uint32_t room_id;
 #endif

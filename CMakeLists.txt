@@ -138,13 +138,16 @@ ADD_CUSTOM_TARGET(uninstall
 add_subdirectory(src)
 
 # Propagate turbo compile definitions to all targets
-if(TURN_TURBO)
-    add_compile_definitions(TURN_TURBO)
-    if(TURN_USE_DPDK)
-        add_compile_definitions(TURN_USE_DPDK)
+if(TURBO_FEATURES)
+    add_compile_definitions(TURBO_FEATURES)
+    if(TURBO_IOURING)
+        add_compile_definitions(TURBO_IOURING)
     endif()
-    if(TURN_USE_AFXDP)
-        add_compile_definitions(TURN_USE_AFXDP)
+    if(TURBO_AFXDP)
+        add_compile_definitions(TURBO_AFXDP)
+    endif()
+    if(TURBO_ROOMS)
+        add_compile_definitions(TURBO_ROOMS)
     endif()
 endif()
 
@@ -199,14 +202,27 @@ option(BUILD_TESTING "Build unit tests" OFF)
 if(BUILD_TESTING)
     enable_testing()
     add_subdirectory(tests)
-# Turbo extensions options
-option(TURN_TURBO "Enable TURBO extensions" OFF)
-option(TURN_USE_DPDK "Use DPDK network backend" OFF)
-option(TURN_USE_AFXDP "Use AF_XDP network backend" OFF)
+endif()
 
-# Validate turbo options
-if(TURN_TURBO)
-    if(NOT TURN_USE_DPDK AND NOT TURN_USE_AFXDP)
-        message(FATAL_ERROR "TURN_TURBO requires at least one backend: TURN_USE_DPDK or TURN_USE_AFXDP")
+# Turbo extensions options
+option(TURBO_FEATURES "Enable Turbo high-performance extensions" OFF)
+option(TURBO_ROOMS    "Enable Turbo room broadcasting (requires TURBO_FEATURES)" OFF)
+
+# Turbo backend selection: io_uring (default) or af_xdp
+set(TURBO_BACKEND "io_uring" CACHE STRING "Turbo network backend: io_uring or af_xdp")
+set_property(CACHE TURBO_BACKEND PROPERTY STRINGS io_uring af_xdp)
+
+if(TURBO_FEATURES)
+    if(TURBO_BACKEND STREQUAL "io_uring")
+        option(TURBO_IOURING "Use io_uring backend" ON)
+        option(TURBO_AFXDP   "Use AF_XDP backend"   OFF)
+    elseif(TURBO_BACKEND STREQUAL "af_xdp")
+        option(TURBO_IOURING "Use io_uring backend" OFF)
+        option(TURBO_AFXDP   "Use AF_XDP backend"   ON)
+    else()
+        message(FATAL_ERROR "Invalid TURBO_BACKEND: '${TURBO_BACKEND}'. Choose io_uring or af_xdp.")
+    endif()
+    if(TURBO_ROOMS AND NOT TURBO_FEATURES)
+        message(FATAL_ERROR "TURBO_ROOMS requires TURBO_FEATURES to be enabled.")
     endif()
 endif()

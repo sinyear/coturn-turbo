@@ -1,7 +1,7 @@
 #ifndef TURBO_SWITCH_H
 #define TURBO_SWITCH_H
 
-#include "turbo_netif.h"
+#include "../netif/turbo_netif.h"
 #include <stdint.h>
 #include <stddef.h>
 #include <netinet/in.h>

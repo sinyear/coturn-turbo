@@ -38,9 +38,7 @@
 #include "dbdrivers/dbdriver.h"
 
 #include "prom_server.h"
-#include "turbo_api.h"
-#include "turbo_core.h"
-#include "turbo_forward.h"
+#include "../../turbo/api/turbo_api.h"
 
 #include <assert.h>
 #include <limits.h>
@@ -246,7 +244,7 @@ turn_params_t turn_params = {
     false, /* drop_invalid_packets_log */
     false, /* udp_recvmmsg */
     false, /* include_reason_string */
-#if defined(TURN_TURBO)
+#if defined(TURBO_FEATURES)
     false, /* turbo_enabled */
     0,     /* turbo_api_port */
     NULL   /* turbo_afxdp_mode */
@@ -1050,7 +1048,7 @@ static char Usage[] =
     "						Requires DPDK or AF_XDP support to be compiled in.\n"
     " --turbo-api-port		<port>		Port for the turbo room management HTTP API.\n"
     "						Default is 0 (disabled).\n"
-#if defined(TURN_USE_AFXDP)
+#if defined(TURBO_AFXDP)
     " --turbo-afxdp-mode		<mode>		AF_XDP XDP mode selection (AF_XDP backend only).\n"
     "						Values: auto (default), drv, skb.\n"
     "						auto: try DRV (native zero-copy), fallback to SKB.\n"
@@ -1555,10 +1553,10 @@ enum EXTRA_OPTS {
   VERSION_OPT,
   CPUS_OPT,
   INCLUDE_REASON_STRING_OPT,
-#if defined(TURN_TURBO)
+#if defined(TURBO_FEATURES)
   TURBO_OPT,
   TURBO_API_PORT_OPT
-#if defined(TURN_USE_AFXDP)
+#if defined(TURBO_AFXDP)
   ,TURBO_AFXDP_MODE_OPT
 #endif
 #endif
@@ -1713,10 +1711,10 @@ static const struct myoption long_options[] = {
     {"version", optional_argument, NULL, VERSION_OPT},
     {"syslog-facility", required_argument, NULL, SYSLOG_FACILITY_OPT},
     {"cpus", required_argument, NULL, CPUS_OPT},
-#if defined(TURN_TURBO)
+#if defined(TURBO_FEATURES)
     {"turbo", optional_argument, NULL, TURBO_OPT},
     {"turbo-api-port", required_argument, NULL, TURBO_API_PORT_OPT},
-#if defined(TURN_USE_AFXDP)
+#if defined(TURBO_AFXDP)
     {"turbo-afxdp-mode", required_argument, NULL, TURBO_AFXDP_MODE_OPT},
 #endif
 #endif
@@ -2544,14 +2542,14 @@ static void set_option(int c, char *value) {
   case 'n':
   case 'h':
     break;
-#if defined(TURN_TURBO)
+#if defined(TURBO_FEATURES)
   case TURBO_OPT:
     turn_params.turbo_enabled = get_bool_value(value);
     break;
   case TURBO_API_PORT_OPT:
     turn_params.turbo_api_port = (uint16_t)atoi(value);
     break;
-#if defined(TURN_USE_AFXDP)
+#if defined(TURBO_AFXDP)
   case TURBO_AFXDP_MODE_OPT:
     turn_params.turbo_afxdp_mode = strdup(value);
     break;
@@ -2637,12 +2635,12 @@ static void read_config_file(int argc, char **argv, int pass) {
           exit(0);
         } else if (!strcmp(argv[i], "--version")) {
           printf("%s\n", TURN_SERVER_VERSION);
-#if defined(TURN_USE_DPDK)
-          printf("  Build: TURBO + DPDK\n");
-#elif defined(TURN_USE_AFXDP)
+#if defined(TURBO_FEATURES) && defined(TURBO_AFXDP)
           printf("  Build: TURBO + AF_XDP\n");
-#elif defined(TURN_TURBO)
-          printf("  Build: TURBO (no backend)\n");
+#elif defined(TURBO_FEATURES) && defined(TURBO_IOURING)
+          printf("  Build: TURBO + io_uring\n");
+#elif defined(TURBO_FEATURES)
+          printf("  Build: TURBO (epoll)\n");
 #else
           printf("  Build: Standard TURN (no Turbo)\n");
 #endif
@@ -3503,12 +3501,12 @@ int main(int argc, char **argv) {
   drop_privileges();
   start_prometheus_server();
 
-#if defined(TURN_TURBO)
+#if defined(TURBO_FEATURES)
   // Initialize turbo components
   if (turn_params.turbo_enabled) {
     TURN_LOG_FUNC(TURN_LOG_LEVEL_INFO, "Initializing TURBO components...\n");
 
-#if defined(TURN_USE_AFXDP)
+#if defined(TURBO_AFXDP)
     // Pass AF_XDP mode to the backend via environment variable
     if (turn_params.turbo_afxdp_mode && turn_params.turbo_afxdp_mode[0]) {
       setenv("TURBO_AFXDP_MODE", turn_params.turbo_afxdp_mode, 1);
@@ -3541,7 +3539,7 @@ int main(int argc, char **argv) {
 
   run_listener_server(&(turn_params.listener));
 
-#if defined(TURN_TURBO)
+#if defined(TURBO_FEATURES)
   /* Cleanup turbo components */
   turbo_api_stop();
   if (turbo_room_mgr) {
