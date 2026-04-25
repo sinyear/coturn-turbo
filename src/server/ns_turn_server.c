@@ -3705,8 +3705,10 @@ static int handle_turn_command(turn_turnserver *server, ts_ur_super_session *ss,
           sar = stun_attr_get_next_str(ioa_network_buffer_data(in_buffer->nbh),
                                        ioa_network_buffer_get_size(in_buffer->nbh), sar);
         }
-
-        ss->origin_set = 1;
+        /* Note: ss->origin_set is intentionally NOT committed here. We pin the origin only
+           after the request's MESSAGE-INTEGRITY validates (see post-auth block below). An
+           unauthenticated first ALLOCATE could otherwise lock the session into a realm of
+           the attacker's choice. Until auth succeeds, every request re-parses the origin. */
       }
 
       if (!err_code && !(*resp_constructed) && !no_response) {
@@ -3719,6 +3721,10 @@ static int handle_turn_command(turn_turnserver *server, ts_ur_super_session *ss,
                           &message_integrity, &postpone_reply, can_resume);
           if (postpone_reply) {
             no_response = 1;
+          }
+          /* Pin origin only after the request was authenticated (MESSAGE-INTEGRITY validated). */
+          if (!err_code && message_integrity && (method == STUN_METHOD_ALLOCATE)) {
+            ss->origin_set = 1;
           }
         }
       }
@@ -4975,8 +4981,6 @@ void init_turn_server(turn_turnserver *server, turnserver_id id, int verbose, io
     server->mobile_connections_map = ur_map_create();
   }
   server->acme_redirect = acme_redirect;
-
-  TURN_LOG_FUNC(TURN_LOG_LEVEL_DEBUG, "turn server id=%d created\n", (int)id);
 
   server->check_origin = check_origin;
   server->no_tcp_relay = no_tcp_relay;

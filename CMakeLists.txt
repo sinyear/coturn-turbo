@@ -86,6 +86,10 @@ if(DEFINED TURN_SERVER_BUILD_INFO)
     add_definitions(-DTURN_SERVER_BUILD_INFO=${TURN_SERVER_BUILD_INFO})
 endif()
 
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    add_definitions(-D_GNU_SOURCE)
+endif()
+
 IF(MSVC)
     # This option is to enable the /MP switch for Visual Studio 2005 and above compilers
     OPTION(WIN32_USE_MP "Set to ON to build with the /MP option (Visual Studio 2005 and above)." ON)
@@ -191,6 +195,10 @@ if(FUZZER)
 
 endif()
 
+option(BUILD_TESTING "Build unit tests" OFF)
+if(BUILD_TESTING)
+    enable_testing()
+    add_subdirectory(tests)
 # Turbo extensions options
 option(TURN_TURBO "Enable TURBO extensions" OFF)
 option(TURN_USE_DPDK "Use DPDK network backend" OFF)

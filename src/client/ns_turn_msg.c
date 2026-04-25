@@ -103,32 +103,69 @@ int stun_method_str(uint16_t method, char *smethod) {
   return ret;
 }
 
+#if defined(FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION)
+/*
+ * CIFuzz memory builds use an unsanitized OpenSSL. Hitting RAND_bytes() from
+ * harness setup produces startup-only MSan reports inside libcrypto that mask
+ * the message-construction logic we actually want to fuzz.
+ */
+static uint64_t fuzz_prng_next(void) {
+  static uint64_t state = UINT64_C(0x9e3779b97f4a7c15);
+
+  state += UINT64_C(0x9e3779b97f4a7c15);
+  uint64_t z = state;
+  z = (z ^ (z >> 30)) * UINT64_C(0xbf58476d1ce4e5b9);
+  z = (z ^ (z >> 27)) * UINT64_C(0x94d049bb133111eb);
+  return z ^ (z >> 31);
+}
+#endif
+
 long turn_random_number(void) {
   long ret = 0;
+#if defined(FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION)
+  ret = (long)fuzz_prng_next();
+#else
   if (!RAND_bytes((unsigned char *)&ret, sizeof(ret)))
 #if defined(WINDOWS)
     ret = rand();
 #else
     ret = random();
 #endif
+#endif
   return ret;
 }
 
 static void generate_random_nonce(unsigned char *nonce, size_t sz) {
+#if defined(FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION)
+  if (nonce) {
+    for (size_t i = 0; i < sz; ++i) {
+      nonce[i] = (unsigned char)turn_random_number();
+    }
+  }
+#else
   if (!RAND_bytes(nonce, (int)sz)) {
     for (size_t i = 0; i < sz; ++i) {
       nonce[i] = (unsigned char)turn_random_number();
     }
   }
+#endif
 }
 
 static void turn_random_tid_size(void *id) {
   uint32_t *ar = (uint32_t *)id;
+#if defined(FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION)
+  if (ar) {
+    for (size_t i = 0; i < 3; ++i) {
+      ar[i] = (uint32_t)turn_random_number();
+    }
+  }
+#else
   if (!RAND_bytes((unsigned char *)ar, 12)) {
     for (size_t i = 0; i < 3; ++i) {
       ar[i] = (uint32_t)turn_random_number();
     }
   }
+#endif
 }
 
 bool stun_calculate_hmac(const uint8_t *buf, size_t len, const uint8_t *key, size_t keylen, uint8_t *hmac,
@@ -714,6 +751,7 @@ static void stun_init_error_response_common_str(uint8_t *buf, size_t *len, uint1
   }
 
   uint8_t avalue[513];
+  memset(avalue, 0, sizeof(avalue));
   avalue[0] = 0;
   avalue[1] = 0;
   avalue[2] = (uint8_t)(error_code / 100);
@@ -835,7 +873,7 @@ bool stun_is_channel_message_str(const uint8_t *buf, size_t *blen, uint16_t *chn
 static inline bool sheadof(const char *head, const char *full, bool ignore_case) {
   while (*head) {
     if (*head != *full) {
-      if (ignore_case && (tolower((int)*head) == tolower((int)*full))) {
+      if (ignore_case && (tolower((unsigned char)*head) == tolower((unsigned char)*full))) {
         // OK
       } else {
         return false;
@@ -867,10 +905,19 @@ static inline const char *findstr(const char *hay, size_t slen, const char *need
   return ret;
 }
 
+static inline bool has_prefix(const char *buf, size_t blen, const char *prefix, bool ignore_case) {
+  if (!buf || !prefix) {
+    return false;
+  }
+
+  const size_t prefix_len = strlen(prefix);
+  return (prefix_len <= blen) && sheadof(prefix, buf, ignore_case);
+}
+
 int is_http(const char *s, size_t blen) {
   if (s && blen >= 12) {
-    if ((strstr(s, "GET ") == s) || (strstr(s, "POST ") == s) || (strstr(s, "DELETE ") == s) ||
-        (strstr(s, "PUT ") == s)) {
+    if (has_prefix(s, blen, "GET ", false) || has_prefix(s, blen, "POST ", false) ||
+        has_prefix(s, blen, "DELETE ", false) || has_prefix(s, blen, "PUT ", false)) {
       const char *sp = findstr(s + 4, blen - 4, " HTTP/", false);
       if (sp) {
         sp += 6;
@@ -1931,7 +1978,9 @@ int stun_check_message_integrity_by_key_str(turn_credential_type ct, uint8_t *bu
     return -1;
   }
 
-  if (0 != memcmp(old_hmac, new_hmac, shasize)) {
+  /* Use constant-time comparison: a short-circuiting memcmp leaks the matching prefix
+     length via response timing, allowing byte-by-byte HMAC recovery. */
+  if (0 != CRYPTO_memcmp(old_hmac, new_hmac, shasize)) {
     return 0;
   }
 

@@ -31,6 +31,12 @@
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  */
+
+/* recvmmsg() and struct mmsghdr require _GNU_SOURCE on Linux */
+#if defined(__linux__) && !defined(_GNU_SOURCE)
+#define _GNU_SOURCE
+#endif
+
 #define _GNU_SOURCE
 #include "apputils.h"
 #include "mainrelay.h"
