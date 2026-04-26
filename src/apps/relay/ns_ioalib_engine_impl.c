@@ -1032,6 +1032,18 @@ int create_relay_ioa_sockets(ioa_engine_handle e, ioa_socket_handle client_s, in
     int port = 0;
     ioa_addr local_addr;
     addr_cpy(&local_addr, &relay_addr);
+
+#if defined(TURBO_FEATURES)
+    /* In turbo single-port mode relay sockets are not on the data path — the
+     * shared socket on port 3478 handles all forwarding.  On cloud servers the
+     * configured relay-ip is often a public NAT address not assigned to any
+     * local interface, so bind(2) would return EADDRNOTAVAIL (errno 99).
+     * We keep local_addr/rtcp_local_addr with the real relay IP so that
+     * turnipports_release() can still find the port pool; a separate
+     * turbo_bind_addr with INADDR_ANY is used only for the actual bind call. */
+    const int turbo_bind_any = turn_params.turbo_enabled;
+#endif
+
     for (i = 0; i < 0xFFFF; i++) {
       port = 0;
       rtcp_port = -1;
@@ -1058,13 +1070,28 @@ int create_relay_ioa_sockets(ioa_engine_handle e, ioa_socket_handle client_s, in
 
           rtcp_port = port + 1;
           addr_set_port(&rtcp_local_addr, rtcp_port);
-          if (bind_ioa_socket(*rtcp_s, &rtcp_local_addr, (transport == STUN_ATTRIBUTE_TRANSPORT_TCP_VALUE)) < 0) {
-            addr_set_port(&local_addr, port);
-            turnipports_release(tp, transport, &local_addr);
-            turnipports_release(tp, transport, &rtcp_local_addr);
-            rtcp_port = -1;
-            IOA_CLOSE_SOCKET(*rtcp_s);
-            continue;
+          {
+#if defined(TURBO_FEATURES)
+            ioa_addr _rtcp_bind_addr;
+            addr_cpy(&_rtcp_bind_addr, &rtcp_local_addr);
+            if (turbo_bind_any) {
+              if (_rtcp_bind_addr.ss.sa_family == AF_INET6)
+                ((struct sockaddr_in6 *)&_rtcp_bind_addr)->sin6_addr = in6addr_any;
+              else
+                ((struct sockaddr_in *)&_rtcp_bind_addr)->sin_addr.s_addr = htonl(INADDR_ANY);
+            }
+            const ioa_addr *_rtcp_bind = &_rtcp_bind_addr;
+#else
+            const ioa_addr *_rtcp_bind = &rtcp_local_addr;
+#endif
+            if (bind_ioa_socket(*rtcp_s, _rtcp_bind, (transport == STUN_ATTRIBUTE_TRANSPORT_TCP_VALUE)) < 0) {
+              addr_set_port(&local_addr, port);
+              turnipports_release(tp, transport, &local_addr);
+              turnipports_release(tp, transport, &rtcp_local_addr);
+              rtcp_port = -1;
+              IOA_CLOSE_SOCKET(*rtcp_s);
+              continue;
+            }
           }
         }
       }
@@ -1101,22 +1128,37 @@ int create_relay_ioa_sockets(ioa_engine_handle e, ioa_socket_handle client_s, in
         sock_bind_to_device((*rtp_s)->fd, (unsigned char *)e->relay_ifname);
 
         addr_set_port(&local_addr, port);
-        if (bind_ioa_socket(*rtp_s, &local_addr, (transport == STUN_ATTRIBUTE_TRANSPORT_TCP_VALUE)) >= 0) {
-          break;
-        } else {
-          IOA_CLOSE_SOCKET(*rtp_s);
-          int rtcp_bound = 0;
-          if (rtcp_s && *rtcp_s) {
-            rtcp_bound = (*rtcp_s)->bound;
-            IOA_CLOSE_SOCKET(*rtcp_s);
+        {
+#if defined(TURBO_FEATURES)
+          ioa_addr _rtp_bind_addr;
+          addr_cpy(&_rtp_bind_addr, &local_addr);
+          if (turbo_bind_any) {
+            if (_rtp_bind_addr.ss.sa_family == AF_INET6)
+              ((struct sockaddr_in6 *)&_rtp_bind_addr)->sin6_addr = in6addr_any;
+            else
+              ((struct sockaddr_in *)&_rtp_bind_addr)->sin_addr.s_addr = htonl(INADDR_ANY);
           }
-          addr_set_port(&local_addr, port);
-          turnipports_release(tp, transport, &local_addr);
-          if (rtcp_port >= 0 && !rtcp_bound) {
-            addr_set_port(&rtcp_local_addr, rtcp_port);
-            turnipports_release(tp, transport, &rtcp_local_addr);
+          const ioa_addr *_rtp_bind = &_rtp_bind_addr;
+#else
+          const ioa_addr *_rtp_bind = &local_addr;
+#endif
+          if (bind_ioa_socket(*rtp_s, _rtp_bind, (transport == STUN_ATTRIBUTE_TRANSPORT_TCP_VALUE)) >= 0) {
+            break;
+          } else {
+            IOA_CLOSE_SOCKET(*rtp_s);
+            int rtcp_bound = 0;
+            if (rtcp_s && *rtcp_s) {
+              rtcp_bound = (*rtcp_s)->bound;
+              IOA_CLOSE_SOCKET(*rtcp_s);
+            }
+            addr_set_port(&local_addr, port);
+            turnipports_release(tp, transport, &local_addr);
+            if (rtcp_port >= 0 && !rtcp_bound) {
+              addr_set_port(&rtcp_local_addr, rtcp_port);
+              turnipports_release(tp, transport, &rtcp_local_addr);
+            }
+            rtcp_port = -1;
           }
-          rtcp_port = -1;
         }
       }
     }

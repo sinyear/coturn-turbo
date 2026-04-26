@@ -80,20 +80,48 @@ autoreconf -fi
 
 创建 `/etc/turnserver.conf`：
 
+**自建机房（公网 IP 直接绑定在网卡上）：**
+
 ```ini
 listening-port=3478
 listening-ip=0.0.0.0
-relay-ip=<YOUR_PUBLIC_IP>
+relay-ip=203.0.113.1        # 公网 IP
 realm=my.realm
 lt-cred-mech
 user=test:test123
 
-# Turbo 启用
 turbo
 turbo-backend=io_uring
 turbo-api-port=8080
 verbose
 log-file=/var/log/turnserver/turbo.log
+```
+
+**云服务器（腾讯云 / 阿里云 / AWS 等弹性公网 IP）：**
+
+> 云服务器的公网 IP 由云厂商通过 NAT 映射，不直接绑定在任何本地网卡上。  
+> 必须用 `relay-ip=<私网IP>` + `external-ip=<公网IP>/<私网IP>` 组合，否则会出现  
+> `EADDRNOTAVAIL (errno=99)` 错误。详见 [故障排查](#10-故障排查)。
+
+```ini
+listening-port=3478
+listening-ip=0.0.0.0
+relay-ip=10.0.0.1                        # 私网 IP（网卡实际地址）
+external-ip=122.51.14.87/10.0.0.1       # 公网IP/私网IP
+realm=my.realm
+lt-cred-mech
+user=test:test123
+
+turbo
+turbo-backend=io_uring
+turbo-api-port=8080
+verbose
+log-file=/var/log/turnserver/turbo.log
+```
+
+查看私网 IP：
+```bash
+ip addr show | grep "inet " | grep -v 127
 ```
 
 ### 2.4 启动与验证
@@ -149,7 +177,14 @@ curl http://localhost:8080/admin/status
 # ========== 基础 TURN ==========
 listening-port=3478
 listening-ip=0.0.0.0
-relay-ip=122.51.14.87
+
+# 自建机房（公网 IP 直接在网卡上）：
+# relay-ip=203.0.113.1
+#
+# 云服务器（弹性公网 IP / NAT）：
+relay-ip=10.0.0.1                        # 私网 IP
+external-ip=122.51.14.87/10.0.0.1       # 公网IP/私网IP
+
 realm=north.example.com
 lt-cred-mech
 user=legacy_user:legacy_password
@@ -419,6 +454,7 @@ curl -X POST http://localhost:8080/admin/turbo-disable
 | 现象 | 可能原因 | 检查方法 |
 | :--- | :--- | :--- |
 | Turbo 未生效 | 未加 `--turbo` 启动 | 查看 `/admin/status`，`turbo_enabled` 应为 true |
+| `WARNING: Trying to bind fd N to <公网IP:端口>: errno=99` 大量刷日志，Allocate 返回 508 | **云服务器弹性公网 IP**：公网 IP 未绑定在本地网卡，不能直接 bind | 将 `relay-ip` 改为私网 IP，并添加 `external-ip=公网IP/私网IP`（见 [2.3 最小配置](#23-最小配置)） |
 | `fastpath_hit_rate` 低 | 客户端大量使用 Send Indication 且 L1 未命中 | 开启 `turbo-l1-warmup`，检查网络是否频繁换端口 |
 | AF_XDP 启动失败 | 网卡驱动不支持 | 查看日志，切换至默认 `turbo-backend=io_uring` 或设 `TURBO_AFXDP_MODE=skb` |
 | 房间广播无效 | Provider 配置错误或 Token 验证失败 | 查看日志，验证 Token 生成逻辑 |
