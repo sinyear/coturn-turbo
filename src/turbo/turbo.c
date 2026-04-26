@@ -12,6 +12,7 @@
 #include "forward/turbo_fastpath.h"
 #include "forward/turbo_shaper.h"
 #include "forward/turbo_switch.h"
+#include "forward/turbo_audit.h"
 #include "common/turbo_ring.h"
 #include "room/turbo_room.h"
 #include "room/turbo_room_provider.h"
@@ -42,6 +43,12 @@ struct turbo_room_provider_ops *g_turbo_room_provider = NULL;
 static char  g_rooms_provider_name[32]  = {0};
 static char  g_rooms_secret[256]        = {0};
 static uint64_t g_rooms_max_expiry      = 0;
+
+/* Audit subsystem — active after turbo_init (g_turbo_audit defined in turbo_audit.c) */
+static char g_audit_socket_path[256] = {0};
+
+/* Server start time for uptime reporting */
+time_t g_turbo_start_time = 0;
 
 void *turbo_shared_relay_socket = NULL;  /* ioa_socket_handle (opaque) */
 static int turbo_shared_relay_fd = -1;
@@ -77,6 +84,8 @@ int turbo_get_shared_relay_fd(void) {
 /* ------------------------------------------------------------------ */
 
 int turbo_init(void) {
+    g_turbo_start_time = time(NULL);
+
     /* 1. Create shared relay socket bound to TURBO_RELAY_PORT */
     int fd = socket(AF_INET6, SOCK_DGRAM, 0);
     if (fd < 0) {
@@ -153,7 +162,10 @@ int turbo_init(void) {
     sigemptyset(&sa.sa_mask);
     sigaction(SIGUSR1, &sa, NULL);
 
-    /* 9. Initialise room subsystem */
+    /* 9. Initialise audit subsystem */
+    turbo_audit_init(&g_turbo_audit, 0, g_audit_socket_path[0] ? g_audit_socket_path : NULL);
+
+    /* 10. Initialise room subsystem */
     turbo_room_init(50);
 
     /* 10. Activate room provider if configured */
@@ -181,6 +193,11 @@ int turbo_init(void) {
 /* ------------------------------------------------------------------ */
 /* Room provider pre-init configuration                                 */
 /* ------------------------------------------------------------------ */
+
+void turbo_audit_configure(const char *socket_path) {
+    if (socket_path && socket_path[0])
+        strncpy(g_audit_socket_path, socket_path, sizeof(g_audit_socket_path) - 1);
+}
 
 void turbo_rooms_configure(const char *provider_name, const char *secret,
                              uint64_t max_expiry) {
@@ -210,6 +227,7 @@ void turbo_deinit(void) {
     turbo_netif_close(&g_turbo_netif);
     turbo_fastpath_deinit(&g_turbo_fastpath);
     turbo_ring_destroy(&g_ctrl_ring);
+    turbo_audit_deinit(&g_turbo_audit);
     turbo_room_deinit();
 
     if (g_turbo_room_provider) {
@@ -240,6 +258,10 @@ void turbo_override_relay_port(void *ss, uint16_t port) {
      * where the allocation struct is accessible. */
 }
 
+uint32_t turbo_alloc_id_acquire(void) {
+    return turbo_fastpath_alloc_id_acquire(&g_turbo_fastpath);
+}
+
 void turbo_fastpath_warmup_alloc(uint32_t alloc_id,
                                   const void *client_addr,
                                   const void *peer_addr,
@@ -251,6 +273,31 @@ void turbo_fastpath_warmup_alloc(uint32_t alloc_id,
                            (const struct sockaddr_in6 *)peer_addr,
                            room_id,
                            expiry);
+}
+
+void turbo_fastpath_channel_bind(uint32_t alloc_id,
+                                  const void *client_addr,
+                                  const void *peer_addr,
+                                  uint16_t channel_no) {
+    const struct sockaddr_in6 *ca = (const struct sockaddr_in6 *)client_addr;
+
+    /* Normalize peer_addr to IPv6 (convert IPv4 to IPv4-mapped if needed) */
+    const struct sockaddr *pa_sa = (const struct sockaddr *)peer_addr;
+    struct sockaddr_in6 pa6 = {0};
+    if (pa_sa->sa_family == AF_INET) {
+        const struct sockaddr_in *pa4 = (const struct sockaddr_in *)peer_addr;
+        pa6.sin6_family = AF_INET6;
+        pa6.sin6_port   = pa4->sin_port;
+        pa6.sin6_addr.s6_addr[10] = 0xff;
+        pa6.sin6_addr.s6_addr[11] = 0xff;
+        memcpy(&pa6.sin6_addr.s6_addr[12], &pa4->sin_addr, 4);
+    } else {
+        pa6 = *(const struct sockaddr_in6 *)peer_addr;
+    }
+
+    turbo_fastpath_add_channel(&g_turbo_fastpath, alloc_id, ca, channel_no);
+    turbo_fastpath_update_peer(&g_turbo_fastpath, alloc_id, &pa6);
+    turbo_fastpath_add_peer_rev(&g_turbo_fastpath, alloc_id, &pa6, channel_no);
 }
 
 /* ------------------------------------------------------------------ */
@@ -277,12 +324,43 @@ void turbo_process_packet(struct turbo_netif *tif, struct rtp_packet *pkt) {
         return;
     }
 
-    /* 2. Three-table fastpath lookup */
+    /* 2. Three-table fastpath lookup (client→peer direction) */
     uint32_t alloc_id = turbo_fastpath_lookup(&g_turbo_fastpath,
                                                pkt->data, pkt->len,
                                                &pkt->src_addr);
     if (!alloc_id) {
-        /* Fastpath miss — forward to libevent for full TURN processing */
+        /* Check peer→client reverse direction (raw peer data arriving on relay port) */
+        uint16_t chan_no = 0;
+        uint32_t rev_id = turbo_fastpath_lookup_peer_rev(&g_turbo_fastpath,
+                                                          &pkt->src_addr, &chan_no);
+        if (rev_id) {
+            struct turbo_alloc_snapshot rsnap;
+            if (turbo_fastpath_read_alloc(&g_turbo_fastpath, rev_id, &rsnap) == 0 &&
+                rsnap.client_addr.sin6_family != 0) {
+                /* Wrap raw data in 4-byte ChannelData header and deliver to client */
+                struct rtp_packet *np = tif->ops->alloc_pkt(tif);
+                if (np && (size_t)(pkt->len + 4) <= 2048) {
+                    uint8_t *buf = (uint8_t *)np->data;
+                    buf[0] = (uint8_t)(chan_no >> 8);
+                    buf[1] = (uint8_t)(chan_no & 0xFF);
+                    buf[2] = (uint8_t)(pkt->len >> 8);
+                    buf[3] = (uint8_t)(pkt->len & 0xFF);
+                    memcpy(buf + 4, pkt->data, pkt->len);
+                    np->len      = pkt->len + 4;
+                    np->dst_addr = rsnap.client_addr;
+                    tif->ops->send_burst(tif, &np, 1);
+                    tif->ops->free_pkt(tif, np);
+                } else if (np) {
+                    tif->ops->free_pkt(tif, np);
+                    tif->dropped_packets++;
+                } else {
+                    tif->dropped_packets++;
+                }
+            }
+            tif->ops->free_pkt(tif, pkt);
+            return;
+        }
+        /* True fastpath miss — forward to libevent for full TURN processing */
         if (!turbo_ring_push(&g_ctrl_ring, pkt)) {
             tif->dropped_packets++;
             tif->ops->free_pkt(tif, pkt);
@@ -302,6 +380,7 @@ void turbo_process_packet(struct turbo_netif *tif, struct rtp_packet *pkt) {
     /* 4. Forward: unicast or room broadcast */
     if (snap.room_id[0] != '\0') {
         turbo_room_broadcast(tif, snap.room_id, alloc_id, pkt);
+        turbo_audit_media(&g_turbo_audit, alloc_id, pkt->len);
         tif->ops->free_pkt(tif, pkt);
     } else {
         /* Unicast: rewrite destination and send */
@@ -309,6 +388,7 @@ void turbo_process_packet(struct turbo_netif *tif, struct rtp_packet *pkt) {
         struct rtp_packet *clone = tif->ops->clone_pkt(tif, pkt);
         if (clone) {
             tif->ops->send_burst(tif, &clone, 1);
+            turbo_audit_media(&g_turbo_audit, alloc_id, pkt->len);
             tif->ops->free_pkt(tif, clone);
         }
         tif->ops->free_pkt(tif, pkt);

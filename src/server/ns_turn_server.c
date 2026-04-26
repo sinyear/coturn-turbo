@@ -620,6 +620,7 @@ int turn_session_info_copy_from(struct turn_session_info *tsi, ts_ur_super_sessi
 
 #if defined(TURBO_FEATURES)
     strncpy(tsi->turbo_room_id, ss->turbo_room_id, 63);
+    tsi->turbo_alloc_id = ss->turbo_alloc_id;
 #endif
 
     ret = 0;
@@ -1495,24 +1496,27 @@ static int handle_turn_allocate(turn_turnserver *server, ts_ur_super_session *ss
 
 #if defined(TURBO_FEATURES)
             {
-              /* Compute alloc_id from session id (fits in fastpath table) */
-              uint32_t _alloc_id = (uint32_t)(ss->id % (TURBO_ALLOC_TABLE_SIZE - 1)) + 1;
-              ioa_addr *_ca = get_remote_addr_from_ioa_socket(ss->client_socket);
-              uint64_t _expiry = (uint64_t)time(NULL) + lifetime;
+              /* Acquire a collision-free fastpath slot (P6) */
+              uint32_t _alloc_id = turbo_alloc_id_acquire();
+              if (_alloc_id) {
+                ss->turbo_alloc_id = _alloc_id;
+                ioa_addr *_ca = get_remote_addr_from_ioa_socket(ss->client_socket);
+                uint64_t _expiry = (uint64_t)time(NULL) + lifetime;
 
-              /* Warm up L1 fastpath cache */
-              turbo_fastpath_warmup_alloc(_alloc_id,
-                  _ca ? (const void *)&_ca->ss : NULL,
-                  NULL,   /* peer addr populated later at ChannelBind */
-                  ss->turbo_room_id[0] ? ss->turbo_room_id : "",
-                  _expiry);
+                /* Warm up L1 fastpath cache; peer_addr filled later at ChannelBind */
+                turbo_fastpath_warmup_alloc(_alloc_id,
+                    _ca ? (const void *)&_ca->ss : NULL,
+                    NULL,
+                    ss->turbo_room_id[0] ? ss->turbo_room_id : "",
+                    _expiry);
 
-              /* Add to room if provider matched */
-              if (ss->turbo_room_id[0] != '\0') {
-                struct sockaddr_in6 _peer6 = {0};
-                _peer6.sin6_family = AF_INET6;
-                turbo_room_add_member(ss->turbo_room_id, ss->turbo_member_id,
-                                      _alloc_id, &_peer6);
+                /* Add to room if provider matched */
+                if (ss->turbo_room_id[0] != '\0') {
+                  struct sockaddr_in6 _peer6 = {0};
+                  _peer6.sin6_family = AF_INET6;
+                  turbo_room_add_member(ss->turbo_room_id, ss->turbo_member_id,
+                                        _alloc_id, &_peer6);
+                }
               }
             }
 #endif
@@ -2795,6 +2799,18 @@ static int handle_turn_channel_bind(turn_turnserver *server, ts_ur_super_session
                                              server->include_reason_string);
           ioa_network_buffer_set_size(nbh, len);
           *resp_constructed = 1;
+
+#if defined(TURBO_FEATURES)
+          if (ss->turbo_alloc_id) {
+            ioa_addr *_ca = get_remote_addr_from_ioa_socket(ss->client_socket);
+            if (_ca) {
+              turbo_fastpath_channel_bind(ss->turbo_alloc_id,
+                  (const void *)&_ca->ss,
+                  (const void *)&peer_addr.ss,
+                  chnum);
+            }
+          }
+#endif
 
           if (!(ss->is_mobile)) {
             if (get_ioa_socket_type(ss->client_socket) == UDP_SOCKET ||
@@ -4272,9 +4288,9 @@ int shutdown_client_connection(turn_turnserver *server, ts_ur_super_session *ss,
   turn_server_remove_all_from_ur_map_ss(ss, socket_type);
 
 #if defined(TURBO_FEATURES)
-  {
-    uint32_t _alloc_id = (uint32_t)(ss->id % (TURBO_ALLOC_TABLE_SIZE - 1)) + 1;
-    turbo_alloc_teardown(_alloc_id, ss->turbo_room_id, ss->turbo_member_id);
+  if (ss->turbo_alloc_id) {
+    turbo_alloc_teardown(ss->turbo_alloc_id, ss->turbo_room_id, ss->turbo_member_id);
+    ss->turbo_alloc_id = 0;
   }
 #endif
 

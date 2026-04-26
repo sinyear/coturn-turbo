@@ -128,6 +128,7 @@ static const uint8_t *find_username_attr(const uint8_t *buf, size_t len,
 
 int turbo_fastpath_init(struct turbo_fastpath *fp) {
     memset(fp, 0, sizeof(*fp));
+    fp->next_alloc_id = 1;  /* 0 is TURBO_ALLOC_ID_INVALID */
     return pthread_mutex_init(&fp->write_lock, NULL);
 }
 
@@ -248,8 +249,9 @@ void turbo_fastpath_warmup(struct turbo_fastpath *fp,
     struct turbo_alloc_entry *e = &fp->alloc_table[alloc_id];
     turbo_seqlock_write_begin(&e->seqlock);
     e->snap.alloc_id = alloc_id;
-    if (peer_addr)  e->snap.peer_addr = *peer_addr;
-    if (room_id)    strncpy(e->snap.room_id, room_id, 63);
+    if (client_addr) e->snap.client_addr = *client_addr;
+    if (peer_addr)   e->snap.peer_addr   = *peer_addr;
+    if (room_id)     strncpy(e->snap.room_id, room_id, 63);
     e->snap.expiry  = expiry;
     e->used         = 1;
     turbo_seqlock_write_end(&e->seqlock);
@@ -321,5 +323,101 @@ void turbo_fastpath_remove(struct turbo_fastpath *fp, uint32_t alloc_id) {
             fp->username_table[i].used = 0;
     }
 
+    /* Invalidate peer reverse entries */
+    for (int i = 0; i < TURBO_PEER_REV_TABLE_SIZE; i++) {
+        if (fp->peer_rev_table[i].alloc_id == alloc_id)
+            fp->peer_rev_table[i].used = 0;
+    }
+
     pthread_mutex_unlock(&fp->write_lock);
+}
+
+/* ------------------------------------------------------------------ */
+/* Alloc-ID slot allocator (P6: collision-free assignment)             */
+/* ------------------------------------------------------------------ */
+
+uint32_t turbo_fastpath_alloc_id_acquire(struct turbo_fastpath *fp) {
+    pthread_mutex_lock(&fp->write_lock);
+    uint32_t found = 0;
+    for (uint32_t i = 0; i < TURBO_ALLOC_TABLE_SIZE - 1; i++) {
+        uint32_t id = fp->next_alloc_id;
+        fp->next_alloc_id = (fp->next_alloc_id % (TURBO_ALLOC_TABLE_SIZE - 1)) + 1;
+        if (!fp->alloc_table[id].used) {
+            found = id;
+            break;
+        }
+    }
+    pthread_mutex_unlock(&fp->write_lock);
+    return found;  /* 0 = table full */
+}
+
+void turbo_fastpath_alloc_id_release(struct turbo_fastpath *fp, uint32_t alloc_id) {
+    /* turbo_fastpath_remove already clears the entry; this is a no-op stub
+     * kept so callers don't need to know the internals. */
+    (void)fp;
+    (void)alloc_id;
+}
+
+/* ------------------------------------------------------------------ */
+/* Peer reverse-lookup table                                           */
+/* ------------------------------------------------------------------ */
+
+/* Use same mix as l1_key — peer key is also (ip, port) */
+static uint64_t peer_rev_key(const struct sockaddr_in6 *src) {
+    return l1_key(src);
+}
+
+#define PEER_REV_IDX(key)  ((uint32_t)((key) % TURBO_PEER_REV_TABLE_SIZE))
+
+void turbo_fastpath_update_peer(struct turbo_fastpath *fp,
+                                 uint32_t alloc_id,
+                                 const struct sockaddr_in6 *peer_addr) {
+    if (!alloc_id || alloc_id >= TURBO_ALLOC_TABLE_SIZE || !peer_addr) return;
+
+    struct turbo_alloc_entry *e = &fp->alloc_table[alloc_id];
+    pthread_mutex_lock(&fp->write_lock);
+    turbo_seqlock_write_begin(&e->seqlock);
+    e->snap.peer_addr = *peer_addr;
+    turbo_seqlock_write_end(&e->seqlock);
+    pthread_mutex_unlock(&fp->write_lock);
+}
+
+void turbo_fastpath_add_peer_rev(struct turbo_fastpath *fp,
+                                  uint32_t alloc_id,
+                                  const struct sockaddr_in6 *peer_addr,
+                                  uint16_t channel_no) {
+    if (!alloc_id || !peer_addr) return;
+    pthread_mutex_lock(&fp->write_lock);
+
+    uint64_t key = peer_rev_key(peer_addr);
+    uint32_t idx = PEER_REV_IDX(key);
+    for (int i = 0; i < TURBO_PEER_REV_TABLE_SIZE; i++) {
+        uint32_t slot = (idx + i) % TURBO_PEER_REV_TABLE_SIZE;
+        if (!fp->peer_rev_table[slot].used || fp->peer_rev_table[slot].key == key) {
+            fp->peer_rev_table[slot].key        = key;
+            fp->peer_rev_table[slot].alloc_id   = alloc_id;
+            fp->peer_rev_table[slot].channel_no = channel_no;
+            fp->peer_rev_table[slot].used       = 1;
+            break;
+        }
+    }
+
+    pthread_mutex_unlock(&fp->write_lock);
+}
+
+uint32_t turbo_fastpath_lookup_peer_rev(struct turbo_fastpath *fp,
+                                         const struct sockaddr_in6 *src,
+                                         uint16_t *channel_no_out) {
+    uint64_t key = peer_rev_key(src);
+    uint32_t idx = PEER_REV_IDX(key);
+    for (int i = 0; i < 8; i++) {
+        uint32_t slot = (idx + i) % TURBO_PEER_REV_TABLE_SIZE;
+        if (!fp->peer_rev_table[slot].used) break;
+        if (fp->peer_rev_table[slot].key == key) {
+            if (channel_no_out)
+                *channel_no_out = fp->peer_rev_table[slot].channel_no;
+            return fp->peer_rev_table[slot].alloc_id;
+        }
+    }
+    return 0;
 }

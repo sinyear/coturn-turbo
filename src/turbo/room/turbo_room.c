@@ -27,6 +27,7 @@ static uint32_t            g_max_members = 50;
 
 _Atomic uint64_t g_turbo_room_member_overflow = 0;
 _Atomic uint32_t g_turbo_active_rooms = 0;
+_Atomic uint32_t g_turbo_total_members = 0;
 
 /* ------------------------------------------------------------------ */
 /* Internal helpers                                                     */
@@ -161,6 +162,7 @@ int turbo_room_add_member(const char *room_id,
     nm->next = room->members;
     room->members = nm;
     room->member_count++;
+    atomic_fetch_add_explicit(&g_turbo_total_members, 1, __ATOMIC_RELAXED);
 
     pthread_rwlock_unlock(&g_rooms_lock);
     return 0;
@@ -187,6 +189,7 @@ void turbo_room_remove_member(const char *room_id, const char *member_id) {
             struct turbo_room_member *del = *pp;
             *pp = del->next;
             room->member_count--;
+            atomic_fetch_sub_explicit(&g_turbo_total_members, 1, __ATOMIC_RELAXED);
             free(del);
             break;
         }
@@ -219,6 +222,7 @@ void turbo_room_remove_alloc(uint32_t alloc_id) {
                     struct turbo_room_member *del = *pp;
                     *pp = del->next;
                     r->member_count--;
+                    atomic_fetch_sub_explicit(&g_turbo_total_members, 1, __ATOMIC_RELAXED);
                     free(del);
                     /* keep scanning — alloc_id should be unique, but be safe */
                     continue;

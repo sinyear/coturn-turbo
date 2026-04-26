@@ -112,4 +112,7 @@ extern _Atomic uint64_t g_turbo_room_member_overflow;
 /* Active room count (incremented on lazy create, decremented on auto-destroy) */
 extern _Atomic uint32_t g_turbo_active_rooms;
 
+/* Total member count across all rooms (incremented on add, decremented on remove) */
+extern _Atomic uint32_t g_turbo_total_members;
+
 #endif /* TURBO_ROOM_H */

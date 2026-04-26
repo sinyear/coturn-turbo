@@ -125,8 +125,9 @@ struct _ts_ur_super_session {
   band_limit_t bps;
 #if defined(TURBO_FEATURES)
   /* Turbo SFU */
-  char turbo_room_id[64];    /* empty string if not in a room */
-  char turbo_member_id[64];
+  char     turbo_room_id[64];    /* empty string if not in a room */
+  char     turbo_member_id[64];
+  uint32_t turbo_alloc_id;       /* fastpath slot (acquired at Allocate, released at teardown) */
 #endif
 };
 
@@ -184,8 +185,9 @@ struct turn_session_info {
   band_limit_t bps;
 #if defined(TURBO_FEATURES)
   /* Turbo SFU */
-  char turbo_room_id[64];
-  char turbo_member_id[64];
+  char     turbo_room_id[64];
+  char     turbo_member_id[64];
+  uint32_t turbo_alloc_id;
 #endif
 };
 

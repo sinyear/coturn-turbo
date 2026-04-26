@@ -2649,6 +2649,20 @@ try_start:
     if (ioa_socket_check_bandwidth(s, buf_elem, 1)) {
 
       if (s->read_cb) {
+#if defined(TURBO_FEATURES)
+        /* ChannelData (0x4000-0x7FFF) arriving on the coturn listener socket
+         * is forwarded by the turbo worker via its SO_REUSEPORT socket.
+         * Drop the copy that landed here to avoid spurious processing. */
+        if (turn_params.turbo_enabled && len >= 2) {
+          const uint8_t *_p = (const uint8_t *)buf_elem->buf.buf;
+          uint16_t _mt = ((uint16_t)_p[0] << 8) | _p[1];
+          if (_mt >= 0x4000 && _mt <= 0x7FFF) {
+            free_blist_elem(s->e, buf_elem);
+            buf_elem = NULL;
+            goto turbo_channel_drop;
+          }
+        }
+#endif
         ioa_net_data nd;
 
         memset(&nd, 0, sizeof(ioa_net_data));
@@ -2667,6 +2681,9 @@ try_start:
 
         try_ok = 1;
 
+#if defined(TURBO_FEATURES)
+        turbo_channel_drop: ;
+#endif
       } else {
         ioa_network_buffer_delete(s->e, s->defer_nbh);
         s->defer_nbh = buf_elem;

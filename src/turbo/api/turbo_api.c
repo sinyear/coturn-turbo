@@ -86,15 +86,18 @@ static void cb_status(struct evhttp_request *req, void *arg) {
     uint64_t total = ch + l1 + un + ms;
     double hit_rate = total > 0 ? (100.0 * (double)(ch + l1 + un) / (double)total) : 0.0;
 
-    size_t   allocs  = (size_t)atomic_load(&global_allocation_count);
-    uint32_t rooms   = (uint32_t)atomic_load_explicit(&g_turbo_active_rooms,        __ATOMIC_RELAXED);
-    int      drained = (int)turn_params.drain_turn_server;
+    size_t   allocs   = (size_t)atomic_load(&global_allocation_count);
+    uint32_t rooms    = (uint32_t)atomic_load_explicit(&g_turbo_active_rooms,   __ATOMIC_RELAXED);
+    uint32_t members  = (uint32_t)atomic_load_explicit(&g_turbo_total_members,  __ATOMIC_RELAXED);
+    uint64_t degraded = g_turbo_netif.degraded_count;
+    int      drained  = (int)turn_params.drain_turn_server;
+    uint64_t uptime   = (uint64_t)(time(NULL) - (g_turbo_start_time ? g_turbo_start_time : time(NULL)));
 
     const char *backend  = backend_name(g_turbo_netif.backend_type);
     const char *health   = health_name(g_turbo_netif.health_status);
     const char *provider = g_turbo_room_provider ? g_turbo_room_provider->name : "none";
 
-    char buf[512];
+    char buf[768];
     int  n = snprintf(buf, sizeof(buf),
         "{"
         "\"turbo_enabled\":true,"
@@ -102,11 +105,17 @@ static void cb_status(struct evhttp_request *req, void *arg) {
         "\"backend_health\":\"%s\","
         "\"allocations\":%zu,"
         "\"fastpath_hit_rate\":%.2f,"
+        "\"l1_miss_total\":%llu,"
         "\"room_provider\":\"%s\","
         "\"rooms_active\":%u,"
+        "\"total_room_members\":%u,"
+        "\"degraded_count\":%llu,"
+        "\"uptime_seconds\":%llu,"
         "\"drain_mode\":%s"
         "}",
-        backend, health, allocs, hit_rate, provider, rooms,
+        backend, health, allocs, hit_rate, (unsigned long long)ms,
+        provider, rooms, members,
+        (unsigned long long)degraded, (unsigned long long)uptime,
         drained ? "true" : "false");
 
     if (n > 0 && n < (int)sizeof(buf))
