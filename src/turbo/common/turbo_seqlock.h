@@ -30,9 +30,10 @@
 
 #include <stdint.h>
 #include <stdatomic.h>
+#include <stdalign.h>
 
 struct turbo_seqlock {
-    alignas(64) _Atomic uint64_t seq;   /* odd = write in progress */
+    _Atomic uint64_t seq;   /* odd = write in progress */
 };
 
 /* ------------------------------------------------------------------ */

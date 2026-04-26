@@ -97,8 +97,7 @@
 #include <openssl/modes.h>
 
 #if defined(TURBO_FEATURES)
-#include "../../turbo/network/turbo_netif.h"
-#include "../../turbo/forward/turbo_room.h"
+#include "../../turbo/turbo.h"
 #endif
 
 #if !defined(TURN_NO_SYSTEMD)
@@ -371,7 +370,11 @@ typedef struct _turn_params_ {
 #if defined(TURBO_FEATURES)
   bool turbo_enabled;
   uint16_t turbo_api_port;
-  char *turbo_afxdp_mode;  /* "auto", "drv", or "skb" — only meaningful with AF_XDP backend */
+  char *turbo_afxdp_mode;         /* "auto", "drv", or "skb" — only meaningful with AF_XDP backend */
+  bool turbo_rooms_enabled;       /* --turbo-rooms: enable room broadcasting */
+  char *turbo_room_provider;      /* "static" | "token_hmac" */
+  char *turbo_room_secret;        /* shared secret for token_hmac provider */
+  uint64_t turbo_room_max_expiry; /* max token lifetime in seconds (0 = unlimited) */
 #endif
 } turn_params_t;
 
@@ -448,8 +451,7 @@ void increment_global_allocation_count(void);
 void decrement_global_allocation_count(void);
 
 #if defined(TURBO_FEATURES)
-extern struct turbo_netif *turbo_netif;
-extern struct turbo_room_mgr *turbo_room_mgr;
+extern int turbo_get_shared_relay_fd(void);
 #endif
 
 #ifdef __cplusplus

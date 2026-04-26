@@ -125,7 +125,8 @@ struct _ts_ur_super_session {
   band_limit_t bps;
 #if defined(TURBO_FEATURES)
   /* Turbo SFU */
-  uint32_t room_id; /* 0 = not in a room */
+  char turbo_room_id[64];    /* empty string if not in a room */
+  char turbo_member_id[64];
 #endif
 };
 
@@ -183,7 +184,8 @@ struct turn_session_info {
   band_limit_t bps;
 #if defined(TURBO_FEATURES)
   /* Turbo SFU */
-  uint32_t room_id;
+  char turbo_room_id[64];
+  char turbo_member_id[64];
 #endif
 };
 

@@ -186,7 +186,15 @@ typedef struct _allocation {
   void *owner;             // ss
   ur_map *tcp_connections; // global (per turn server) reference
   tcp_connection_list tcs; // local reference
+#if defined(TURBO_FEATURES)
+  char turbo_room_id[64];    /* empty string if not in a room */
+  char turbo_member_id[64];
+#endif
 } allocation;
+
+#if defined(TURBO_FEATURES)
+void allocation_set_room_id(allocation *a, const char *room_id, const char *member_id);
+#endif
 
 //////////// CHANNELS ////////////////////
 

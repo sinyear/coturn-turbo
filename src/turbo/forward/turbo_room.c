@@ -3,11 +3,9 @@
  */
 
 #include "turbo_room.h"
-#include "turbo_switch.h"
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
-#include <assert.h>
 #include <arpa/inet.h>
 
 #define HASH_BUCKETS_DEFAULT 1024
@@ -197,67 +195,11 @@ void turbo_room_remove_member(struct turbo_room_mgr *mgr, uint32_t room_id,
     }
 }
 
+/* Phase 4 placeholder — will be rewritten with RCU member list and rtp_packet API */
 int turbo_room_broadcast(struct turbo_room_mgr *mgr, uint32_t room_id,
-                         uint32_t sender_id, struct turbo_packet *pkt) {
-    if (!mgr || !pkt) return 0;
-    struct turbo_room *room = turbo_room_get(mgr, room_id);
-    if (!room) return 0;
-
-    uint8_t af = TURBO_AF_INET;
-    if (pkt->data && pkt->len >= 1) {
-        uint8_t ip_version = ((const uint8_t *)pkt->data)[0] >> 4;
-        af = (ip_version == 6) ? TURBO_AF_INET6 : TURBO_AF_INET;
-    }
-
-    int num_dsts = 0;
-    struct turbo_member *m = room->members;
-    while (m) {
-        if (m->id != sender_id && !m->marked_for_delete) num_dsts++;
-        m = m->next;
-    }
-    if (num_dsts == 0) return 0;
-
-    uint8_t  *dst_addrs = malloc(num_dsts * TURBO_MAX_ADDR_LEN);
-    uint16_t *dst_ports = malloc(num_dsts * sizeof(uint16_t));
-    if (!dst_addrs || !dst_ports) { free(dst_addrs); free(dst_ports); return 0; }
-
-    int idx = 0;
-    m = room->members;
-    while (m && idx < num_dsts) {
-        if (m->id != sender_id && !m->marked_for_delete) {
-            uint8_t *addr = dst_addrs + (idx * TURBO_MAX_ADDR_LEN);
-            memset(addr, 0, TURBO_MAX_ADDR_LEN);
-            memcpy(addr, &m->addr.sin_addr, 4);
-            dst_ports[idx] = m->addr.sin_port;
-            idx++;
-        }
-        m = m->next;
-    }
-
-    const int MAX_BATCH = 64;
-    struct turbo_packet **tx_array = malloc(MAX_BATCH * sizeof(struct turbo_packet *));
-    if (!tx_array) { free(dst_addrs); free(dst_ports); return 0; }
-
-    int sent_count = 0, offset = 0;
-    while (offset < num_dsts) {
-        int batch = (offset + MAX_BATCH > num_dsts) ? (num_dsts - offset) : MAX_BATCH;
-        int prepared = turbo_switch_broadcast(mgr->netif, pkt,
-                                              dst_addrs + (offset * TURBO_MAX_ADDR_LEN),
-                                              dst_ports + offset,
-                                              batch, af, tx_array, MAX_BATCH);
-        if (prepared > 0) {
-            uint16_t sent = mgr->netif->ops->tx_burst(mgr->netif, tx_array, prepared);
-            sent_count += sent;
-            for (int i = sent; i < prepared; i++)
-                mgr->netif->ops->free_pkt(mgr->netif, tx_array[i]);
-        }
-        offset += batch;
-    }
-
-    free(tx_array);
-    free(dst_addrs);
-    free(dst_ports);
-    return sent_count;
+                         uint32_t sender_id, struct rtp_packet *pkt) {
+    (void)mgr; (void)room_id; (void)sender_id; (void)pkt;
+    return 0;
 }
 
 void turbo_room_mgr_reclaim(struct turbo_room_mgr *mgr) {

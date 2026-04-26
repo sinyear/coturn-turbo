@@ -47,6 +47,10 @@
 #include <stdlib.h>  // for free, malloc, calloc, realloc
 #include <string.h>  // for memcpy, strlen, strcmp
 
+#if defined(TURBO_FEATURES)
+#include "../turbo/turbo.h"
+#endif
+
 ///////////////////////////////////////////
 
 #define FUNCSTART                                                                                                      \
@@ -615,7 +619,7 @@ int turn_session_info_copy_from(struct turn_session_info *tsi, ts_ur_super_sessi
     }
 
 #if defined(TURBO_FEATURES)
-    tsi->room_id = ss->room_id;
+    strncpy(tsi->turbo_room_id, ss->turbo_room_id, 63);
 #endif
 
     ret = 0;
@@ -1406,6 +1410,32 @@ static int handle_turn_allocate(turn_turnserver *server, ts_ur_super_session *ss
 
           set_allocation_valid(alloc, 1);
 
+#if defined(TURBO_FEATURES)
+          /* Room Identity Provider hook */
+          if (g_turbo_room_provider) {
+            struct turbo_room_info _rinfo;
+            memset(&_rinfo, 0, sizeof(_rinfo));
+            ioa_addr *_caddr = get_remote_addr_from_ioa_socket(ss->client_socket);
+            int _pret = g_turbo_room_provider->extract(
+                (const char *)ss->username,
+                (const char *)ss->realm_options.name,
+                NULL,
+                _caddr ? (const struct sockaddr *)&_caddr->ss : NULL,
+                &_rinfo);
+            if (_pret == -2) {
+              /* Token auth failure — undo allocation and return 401 */
+              set_allocation_valid(alloc, 0);
+              *err_code = 401;
+              *reason = (const uint8_t *)"Room token authentication failed";
+            } else if (_pret == 0) {
+              strncpy(ss->turbo_room_id,   _rinfo.room_id,   63);
+              strncpy(ss->turbo_member_id, _rinfo.member_id, 63);
+              allocation_set_room_id(alloc, _rinfo.room_id, _rinfo.member_id);
+            }
+          }
+          if (*err_code) goto handle_turn_allocate_error;
+#endif
+
           stun_tid_cpy(&(alloc->tid), tid);
 
           size_t len = ioa_network_buffer_get_size(nbh);
@@ -1443,6 +1473,12 @@ static int handle_turn_allocate(turn_turnserver *server, ts_ur_super_session *ss
 
           if (pxor_relayed_addr1 || pxor_relayed_addr2) {
 
+#if defined(TURBO_FEATURES)
+            /* Single-port convergence: override relay port → 3478 */
+            if (pxor_relayed_addr1) addr_set_port(pxor_relayed_addr1, TURBO_RELAY_PORT);
+            if (pxor_relayed_addr2) addr_set_port(pxor_relayed_addr2, TURBO_RELAY_PORT);
+#endif
+
             stun_set_allocate_response_str(ioa_network_buffer_data(nbh), &len, tid, pxor_relayed_addr1,
                                            pxor_relayed_addr2, get_remote_addr_from_ioa_socket(ss->client_socket),
                                            lifetime, *(server->max_allocate_lifetime), 0, NULL, out_reservation_token,
@@ -1456,11 +1492,39 @@ static int handle_turn_allocate(turn_turnserver *server, ts_ur_super_session *ss
             *resp_constructed = 1;
 
             turn_report_allocation_set(&(ss->alloc), lifetime, 0);
+
+#if defined(TURBO_FEATURES)
+            {
+              /* Compute alloc_id from session id (fits in fastpath table) */
+              uint32_t _alloc_id = (uint32_t)(ss->id % (TURBO_ALLOC_TABLE_SIZE - 1)) + 1;
+              ioa_addr *_ca = get_remote_addr_from_ioa_socket(ss->client_socket);
+              uint64_t _expiry = (uint64_t)time(NULL) + lifetime;
+
+              /* Warm up L1 fastpath cache */
+              turbo_fastpath_warmup_alloc(_alloc_id,
+                  _ca ? (const void *)&_ca->ss : NULL,
+                  NULL,   /* peer addr populated later at ChannelBind */
+                  ss->turbo_room_id[0] ? ss->turbo_room_id : "",
+                  _expiry);
+
+              /* Add to room if provider matched */
+              if (ss->turbo_room_id[0] != '\0') {
+                struct sockaddr_in6 _peer6 = {0};
+                _peer6.sin6_family = AF_INET6;
+                turbo_room_add_member(ss->turbo_room_id, ss->turbo_member_id,
+                                      _alloc_id, &_peer6);
+              }
+            }
+#endif
           }
         }
       }
     }
   }
+
+#if defined(TURBO_FEATURES)
+handle_turn_allocate_error:;
+#endif
 
   if (!(*resp_constructed)) {
 
@@ -4206,6 +4270,13 @@ int shutdown_client_connection(turn_turnserver *server, ts_ur_super_session *ss,
   }
 
   turn_server_remove_all_from_ur_map_ss(ss, socket_type);
+
+#if defined(TURBO_FEATURES)
+  {
+    uint32_t _alloc_id = (uint32_t)(ss->id % (TURBO_ALLOC_TABLE_SIZE - 1)) + 1;
+    turbo_alloc_teardown(_alloc_id, ss->turbo_room_id, ss->turbo_member_id);
+  }
+#endif
 
   FUNCEND;
 

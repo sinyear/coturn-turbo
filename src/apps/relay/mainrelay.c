@@ -38,7 +38,9 @@
 #include "dbdrivers/dbdriver.h"
 
 #include "prom_server.h"
-#include "../../turbo/api/turbo_api.h"
+#if defined(TURBO_FEATURES)
+#include "../../turbo/turbo.h"
+#endif
 
 #include <assert.h>
 #include <limits.h>
@@ -247,12 +249,13 @@ turn_params_t turn_params = {
 #if defined(TURBO_FEATURES)
     false, /* turbo_enabled */
     0,     /* turbo_api_port */
-    NULL   /* turbo_afxdp_mode */
+    NULL,  /* turbo_afxdp_mode */
+    false, /* turbo_rooms_enabled */
+    NULL,  /* turbo_room_provider */
+    NULL,  /* turbo_room_secret */
+    0      /* turbo_room_max_expiry */
 #endif
 };
-
-struct turbo_netif *turbo_netif = NULL;
-struct turbo_room_mgr *turbo_room_mgr = NULL;
 
 //////////////// OpenSSL Init //////////////////////
 
@@ -1044,16 +1047,10 @@ static char Usage[] =
     "						Useful in virtualized/containerized environments where\n"
     "						the system reports the host CPU count instead of\n"
     "						the allocated container CPUs.\n"
-    " --turbo				Enable TURBO extensions for high-performance SFU broadcasting.\n"
-    "						Requires DPDK or AF_XDP support to be compiled in.\n"
-    " --turbo-api-port		<port>		Port for the turbo room management HTTP API.\n"
-    "						Default is 0 (disabled).\n"
+    " --turbo				Enable TURBO high-performance extensions (io_uring/AF_XDP/epoll).\n"
+    " --turbo-api-port		<port>		Port for the turbo admin HTTP API. Default 0 (disabled).\n"
 #if defined(TURBO_AFXDP)
-    " --turbo-afxdp-mode		<mode>		AF_XDP XDP mode selection (AF_XDP backend only).\n"
-    "						Values: auto (default), drv, skb.\n"
-    "						auto: try DRV (native zero-copy), fallback to SKB.\n"
-    "						drv:  force DRV mode (requires driver XDP support).\n"
-    "						skb:  force SKB mode (kernel fallback, highest compatibility).\n"
+    " --turbo-afxdp-mode		<mode>		AF_XDP XDP mode: auto (default) | drv | skb.\n"
 #endif
     " --min-port			<port>		Lower bound of the UDP port range for relay endpoints "
     "allocation.\n"
@@ -3502,54 +3499,27 @@ int main(int argc, char **argv) {
   start_prometheus_server();
 
 #if defined(TURBO_FEATURES)
-  // Initialize turbo components
   if (turn_params.turbo_enabled) {
-    TURN_LOG_FUNC(TURN_LOG_LEVEL_INFO, "Initializing TURBO components...\n");
-
 #if defined(TURBO_AFXDP)
-    // Pass AF_XDP mode to the backend via environment variable
-    if (turn_params.turbo_afxdp_mode && turn_params.turbo_afxdp_mode[0]) {
+    if (turn_params.turbo_afxdp_mode && turn_params.turbo_afxdp_mode[0])
       setenv("TURBO_AFXDP_MODE", turn_params.turbo_afxdp_mode, 1);
-      TURN_LOG_FUNC(TURN_LOG_LEVEL_INFO, "AF_XDP mode set to: %s\n", turn_params.turbo_afxdp_mode);
-    }
 #endif
-
-    // Initialize network backend (reuse listener_ifname from -d/--listening-device)
-    turbo_netif = turbo_netif_init(turn_params.listener_ifname, turn_params.listener_port);
-    if (!turbo_netif) {
-      TURN_LOG_FUNC(TURN_LOG_LEVEL_ERROR, "Failed to initialize turbo network interface:%s, port:%d\n", turn_params.listener_ifname, turn_params.listener_port);
+    if (turn_params.turbo_rooms_enabled && turn_params.turbo_room_provider)
+      turbo_rooms_configure(turn_params.turbo_room_provider,
+                             turn_params.turbo_room_secret,
+                             turn_params.turbo_room_max_expiry);
+    if (turbo_init() != 0) {
+      TURN_LOG_FUNC(TURN_LOG_LEVEL_ERROR, "Failed to initialize Turbo; aborting.\n");
       exit(-1);
     }
-
-    // Initialize room manager
-    turbo_room_mgr = turbo_room_mgr_create(turbo_netif, 1024, 10000);
-    if (!turbo_room_mgr) {
-      TURN_LOG_FUNC(TURN_LOG_LEVEL_ERROR, "Failed to initialize turbo room manager\n");
-      exit(-1);
-    }
-
-    // Start room management HTTP API server
-    if (turn_params.turbo_api_port > 0) {
-      turbo_api_start(turn_params.turbo_api_port);
-    }
-
-    TURN_LOG_FUNC(TURN_LOG_LEVEL_INFO, "TURBO components initialized successfully\n");
   }
 #endif
 
   run_listener_server(&(turn_params.listener));
 
 #if defined(TURBO_FEATURES)
-  /* Cleanup turbo components */
-  turbo_api_stop();
-  if (turbo_room_mgr) {
-    turbo_room_mgr_destroy(turbo_room_mgr);
-    turbo_room_mgr = NULL;
-  }
-  if (turbo_netif) {
-    turbo_netif_cleanup(turbo_netif);
-    turbo_netif = NULL;
-  }
+  if (turn_params.turbo_enabled)
+    turbo_deinit();
 #endif
 
   disconnect_database();

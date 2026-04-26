@@ -130,8 +130,9 @@ void turbo_room_remove_member(struct turbo_room_mgr *mgr, uint32_t room_id,
  * @param pkt Packet to broadcast
  * @return Number of members packet was sent to
  */
+/* Phase 4 placeholder — full RCU broadcast rewrite pending */
 int turbo_room_broadcast(struct turbo_room_mgr *mgr, uint32_t room_id,
-                        uint32_t sender_id, struct turbo_packet *pkt);
+                        uint32_t sender_id, struct rtp_packet *pkt);
 
 /**
  * Get room by ID

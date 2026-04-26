@@ -293,13 +293,13 @@ do
   	TURN_DISABLE_RPATH=1 ;;
 
   -turbo | --turbo)
-  	TURN_TURBO=1 ;;
+  	TURBO_ENABLE=1 ;;
 
-  -use-dpdk | --use-dpdk)
-  	TURN_USE_DPDK=1 ;;
+  -turbo-rooms | --turbo-rooms)
+  	TURBO_ROOMS=1 ;;
 
-  -use-afxdp | --use-afxdp)
-  	TURN_USE_AFXDP=1 ;;
+  -turbo-backend=* | --turbo-backend=*)
+  	TURBO_BACKEND=$ac_optarg ;;
 
   esac
 
@@ -1045,37 +1045,29 @@ fi
 # TURBO
 ###############################
 
-if [ -n "${TURN_TURBO}" ]; then
-    ${ECHO_CMD} "Building with TURBO extensions enabled."
+TURBO_CFLAGS=""
 
-    # Check for DPDK if --use-dpdk is specified
-    if [ -n "${TURN_USE_DPDK}" ]; then
-        ${ECHO_CMD} "Checking for DPDK (>=22.07)..."
-        if testpkg_common libdpdk; then
-            # Check DPDK version
-            DPDK_VERSION=$($PKGCONFIG --modversion libdpdk 2>/dev/null | cut -d. -f1-2)
-            if [ -n "${DPDK_VERSION}" ]; then
-                DPDK_MAJOR=$(echo ${DPDK_VERSION} | cut -d. -f1)
-                DPDK_MINOR=$(echo ${DPDK_VERSION} | cut -d. -f2)
-                if [ ${DPDK_MAJOR} -gt 22 ] || ([ ${DPDK_MAJOR} -eq 22 ] && [ ${DPDK_MINOR} -ge 7 ]); then
-                    ${ECHO_CMD} "DPDK ${DPDK_VERSION} found."
-                    TURN_USE_DPDK="-DTURN_USE_DPDK"
-                else
-                    ${ECHO_CMD} "ERROR: DPDK version ${DPDK_VERSION} is too old. Need >= 22.07"
-                    exit 1
-                fi
-            else
-                ${ECHO_CMD} "ERROR: Cannot determine DPDK version."
-                exit 1
-            fi
-        else
-            ${ECHO_CMD} "ERROR: DPDK development libraries not found."
-            exit 1
-        fi
+if [ -n "${TURBO_ENABLE}" ]; then
+    ${ECHO_CMD} "Building with TURBO extensions enabled."
+    TURBO_CFLAGS="-DTURBO_FEATURES"
+
+    # Default backend: io_uring
+    if [ -z "${TURBO_BACKEND}" ]; then
+        TURBO_BACKEND="io_uring"
     fi
 
-    # Check for AF_XDP dependencies if --use-afxdp is specified
-    if [ -n "${TURN_USE_AFXDP}" ]; then
+    if [ "${TURBO_BACKEND}" = "io_uring" ]; then
+        ${ECHO_CMD} "Checking for liburing (io_uring backend)..."
+        if testpkg_common liburing; then
+            LIBURING_CFLAGS=$($PKGCONFIG --cflags liburing 2>/dev/null)
+            LIBURING_LIBS=$($PKGCONFIG --libs liburing 2>/dev/null)
+            ${ECHO_CMD} "liburing found."
+            TURBO_CFLAGS="${TURBO_CFLAGS} -DTURBO_IOURING ${LIBURING_CFLAGS}"
+            OSLIBS="${OSLIBS} ${LIBURING_LIBS}"
+        else
+            ${ECHO_CMD} "WARNING: liburing not found; falling back to epoll backend."
+        fi
+    elif [ "${TURBO_BACKEND}" = "af_xdp" ]; then
         ${ECHO_CMD} "Checking for AF_XDP dependencies (libbpf, libxdp)..."
         if testpkg_common libbpf; then
             ${ECHO_CMD} "libbpf found."
@@ -1083,33 +1075,34 @@ if [ -n "${TURN_TURBO}" ]; then
             ${ECHO_CMD} "ERROR: libbpf development libraries not found."
             exit 1
         fi
-
         if testpkg_common libxdp; then
             ${ECHO_CMD} "libxdp found."
         else
             ${ECHO_CMD} "ERROR: libxdp development libraries not found."
             exit 1
         fi
-
-        TURN_USE_AFXDP="-DTURN_USE_AFXDP"
-    fi
-
-    # Check that at least one backend is selected
-    if [ -z "${TURN_USE_DPDK}" ] && [ -z "${TURN_USE_AFXDP}" ]; then
-        ${ECHO_CMD} "ERROR: --turbo requires either --use-dpdk or --use-afxdp"
+        LIBBPF_CFLAGS=$($PKGCONFIG --cflags libbpf 2>/dev/null)
+        LIBBPF_LIBS=$($PKGCONFIG --libs libbpf 2>/dev/null)
+        LIBXDP_CFLAGS=$($PKGCONFIG --cflags libxdp 2>/dev/null)
+        LIBXDP_LIBS=$($PKGCONFIG --libs libxdp 2>/dev/null)
+        TURBO_CFLAGS="${TURBO_CFLAGS} -DTURBO_AFXDP ${LIBBPF_CFLAGS} ${LIBXDP_CFLAGS}"
+        OSLIBS="${OSLIBS} ${LIBBPF_LIBS} ${LIBXDP_LIBS}"
+    else
+        ${ECHO_CMD} "ERROR: Unknown --turbo-backend value '${TURBO_BACKEND}'. Use io_uring or af_xdp."
         exit 1
     fi
 
-    TURN_TURBO="-DTURN_TURBO"
-else
-    TURN_TURBO="-DTURN_NO_TURBO"
+    if [ -n "${TURBO_ROOMS}" ]; then
+        ${ECHO_CMD} "Turbo room broadcasting enabled."
+        TURBO_CFLAGS="${TURBO_CFLAGS} -DTURBO_ROOMS"
+    fi
 fi
 
 ###############################
 # So, what we have now:
 ###############################
 
-OSCFLAGS="${OSCFLAGS} ${TURN_NO_SCTP} ${TURN_SCTP_INCLUDE} ${TURN_NO_THREAD_BARRIERS} ${TURN_NO_DTLS} ${TURN_NO_GCM} ${TURN_NO_TLS} -DINSTALL_PREFIX=${PREFIX} -DTURNDB=${TURNDBDIR}/turndb ${TURN_NO_OAUTH} ${TURN_TURBO} ${TURN_USE_DPDK} ${TURN_USE_AFXDP}"
+OSCFLAGS="${OSCFLAGS} ${TURN_NO_SCTP} ${TURN_SCTP_INCLUDE} ${TURN_NO_THREAD_BARRIERS} ${TURN_NO_DTLS} ${TURN_NO_GCM} ${TURN_NO_TLS} -DINSTALL_PREFIX=${PREFIX} -DTURNDB=${TURNDBDIR}/turndb ${TURN_NO_OAUTH} ${TURBO_CFLAGS}"
 
 if ! [ -z "${TURN_ACCEPT_RPATH}" ] ; then
   if [ -z "${TURN_DISABLE_RPATH}" ] ; then

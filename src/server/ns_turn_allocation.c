@@ -760,3 +760,14 @@ void pop_unsent_buffer(unsent_buffer *ub) {
 }
 
 //////////////////////////////////////////////////////////////////
+
+#if defined(TURBO_FEATURES)
+#include <string.h>
+void allocation_set_room_id(allocation *a, const char *room_id, const char *member_id) {
+  if (!a) return;
+  strncpy(a->turbo_room_id,   room_id   ? room_id   : "", 63);
+  strncpy(a->turbo_member_id, member_id ? member_id : "", 63);
+  a->turbo_room_id[63]   = '\0';
+  a->turbo_member_id[63] = '\0';
+}
+#endif

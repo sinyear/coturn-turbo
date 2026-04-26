@@ -20,6 +20,7 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <stdatomic.h>
+#include <stdalign.h>
 #include <stdlib.h>
 #include <string.h>
 

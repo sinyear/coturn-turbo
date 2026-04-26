@@ -5,6 +5,8 @@
  * Design doc §5.2, §5.3.2, §T2.5.
  */
 
+#ifdef TURBO_FEATURES
+
 #include "turbo_netif.h"
 #include <stdlib.h>
 #include <string.h>
@@ -13,8 +15,8 @@
 #include <pthread.h>
 #include <signal.h>
 
-/* Set by SIGUSR1 handler; checked every worker loop iteration */
-_Atomic int turbo_degrade_requested = 0;
+/* Defined in turbo.c; set by SIGUSR1 handler */
+extern _Atomic int turbo_degrade_requested;
 
 #define TURBO_RX_BURST 64
 
@@ -157,3 +159,5 @@ void *turbo_worker_loop(void *arg) {
 
     return NULL;
 }
+
+#endif /* TURBO_FEATURES */

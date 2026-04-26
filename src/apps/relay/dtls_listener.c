@@ -49,7 +49,7 @@
 #include "prom_server.h"
 
 #if defined(TURBO_FEATURES)
-#include "../../turbo/forward/turbo_room.h"
+#include "../../turbo/turbo.h"
 #endif
 
 #include <pthread.h>
@@ -451,27 +451,8 @@ static int handle_udp_packet(dtls_listener_relay_server_type *server, struct mes
 
     if (s && ioa_socket_check_bandwidth(s, sm->m.sm.nd.nbh, 1)) {
       s->e = ioa_eng;
-      /* Turbo fast path: check if session belongs to a room */
-#if defined(TURBO_FEATURES)
-      if (turn_params.turbo_enabled && turbo_room_mgr && s->session) {
-        ts_ur_super_session *ss = (ts_ur_super_session *)s->session;
-        if (ss->room_id > 0) {
-          struct turbo_packet pkt;
-          pkt.data = ioa_network_buffer_data(sm->m.sm.nd.nbh);
-          pkt.len = ioa_network_buffer_get_size(sm->m.sm.nd.nbh);
-          pkt.buf_len = ioa_network_buffer_get_size(sm->m.sm.nd.nbh);
-          pkt.priv = NULL;
-
-          int sent = turbo_room_broadcast(turbo_room_mgr, ss->room_id, ss->id, &pkt);
-          if (sent > 0) {
-            TURN_LOG_FUNC(TURN_LOG_LEVEL_DEBUG,
-                "turbo: fast path broadcast to %d members, room=%u, session=%llu\n",
-                sent, ss->room_id, (unsigned long long)ss->id);
-            /* Media forwarded via turbo; still process STUN signaling below */
-          }
-        }
-      }
-#endif
+      /* In turbo mode media is forwarded by the worker thread;
+       * libevent only handles STUN control messages here. */
       if (s && s->read_cb && sm->m.sm.nd.nbh) {
         s->read_cb(s, IOA_EV_READ, &(sm->m.sm.nd), s->read_ctx, 1);
         ioa_network_buffer_delete(ioa_eng, sm->m.sm.nd.nbh);
@@ -918,6 +899,14 @@ static void udp_server_input_handler(evutil_socket_t fd, short what, void *arg) 
   if (!arg) {
     return;
   }
+
+#if defined(TURBO_FEATURES)
+  /* Packets on the turbo shared relay socket are handled by the worker thread.
+   * libevent must not double-process them. */
+  if (turn_params.turbo_enabled && fd == turbo_get_shared_relay_fd()) {
+    return;
+  }
+#endif
 
   int cycle = 0;
 
