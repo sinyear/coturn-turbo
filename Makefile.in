@@ -1,4 +1,6 @@
 
+.DEFAULT_GOAL := all
+
 LIBEVENT_INCLUDE = -I${PREFIX}/include/ -I/usr/local/include/
 
 SHAREDIR = ${PREFIX}/share/turnserver
@@ -39,7 +41,8 @@ TURBO_NETIF_MODS  = src/turbo/netif/turbo_netif.c src/turbo/netif/turbo_port.c s
                     src/turbo/netif/turbo_epoll.c src/turbo/netif/turbo_iouring.c
 TURBO_FORWARD_MODS= src/turbo/forward/turbo_fastpath.c src/turbo/forward/turbo_shaper.c \
                     src/turbo/forward/turbo_switch.c \
-                    src/turbo/forward/turbo_fec.c
+                    src/turbo/forward/turbo_fec.c \
+                    src/turbo/forward/turbo_audit.c
 TURBO_ROOM_MODS   = src/turbo/room/turbo_room.c src/turbo/room/provider_static.c \
                     src/turbo/room/provider_token_hmac.c
 TURBO_API_MODS    = src/turbo/api/turbo_api.c
@@ -71,7 +74,7 @@ XDP_PROG_O = src/turbo/netif/xdp_prog.o
 CLANG ?= clang
 
 $(XDP_PROG_O): src/turbo/netif/xdp_prog.c
-	$(CLANG) -O2 -target bpf -g -I/usr/include -c $< -o $@
+	$(CLANG) -O2 -target bpf -g -I/usr/include -I/usr/include/x86_64-linux-gnu -c $< -o $@
 
 TURN_BUILD_RESULTS += $(XDP_PROG_O)
 endif

@@ -48,33 +48,6 @@ static inline const char* afxdp_mode_to_str(enum afxdp_mode mode)
 	}
 }
 
-/**
- * AF_XDP private data structure.
- * Only one definition — used by turbo_af_xdp.c internals.
- */
-struct turbo_afxdp_priv {
-	struct xsk_socket *xsk;
-	struct xsk_ring_cons rx;
-	struct xsk_ring_prod tx;
-	struct xsk_ring_prod fq;
-	struct xsk_ring_cons cq;
-	void *umem_area;
-	struct xsk_umem *umem;
-	uint32_t frame_size;
-	uint32_t frame_headroom;
-	uint32_t frame_tailroom;
-	uint32_t num_frames;
-	uint32_t frame_size_total;
-
-	/* Extended fields for optimized AF_XDP support */
-	struct xdp_program *xdp_prog;       /* Loaded XDP program (libxdp) */
-	uint32_t *frame_refcount;           /* Per-frame reference counts for safe clone */
-	enum afxdp_mode mode;               /* Actual resolved mode (DRV or SKB) */
-	uint16_t target_port;               /* Port for XDP filtering */
-	int xdp_prog_fd;                    /* XDP program file descriptor */
-	int ifindex;                        /* Network interface index for detach */
-};
-
 /* AF_XDP frame structure */
 struct turbo_afxdp_frame {
 	uint64_t addr;
@@ -83,7 +56,7 @@ struct turbo_afxdp_frame {
 };
 
 /* AF_XDP backend operations table */
-extern const struct turbo_netif_ops turbo_afxdp_ops;
+extern struct turbo_netif_ops turbo_afxdp_ops;
 
 /**
  * Load XDP program on interface

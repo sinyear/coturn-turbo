@@ -37,7 +37,6 @@
 #define _GNU_SOURCE
 #endif
 
-#define _GNU_SOURCE
 #include "apputils.h"
 #include "mainrelay.h"
 #include <errno.h>
