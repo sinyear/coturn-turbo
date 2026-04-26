@@ -40,6 +40,7 @@
 #include "prom_server.h"
 #if defined(TURBO_FEATURES)
 #include "../../turbo/turbo.h"
+#include "../../turbo/api/turbo_api.h"
 #endif
 
 #include <assert.h>
@@ -249,11 +250,13 @@ turn_params_t turn_params = {
 #if defined(TURBO_FEATURES)
     false, /* turbo_enabled */
     0,     /* turbo_api_port */
-    NULL,  /* turbo_afxdp_mode */
+    NULL,  /* turbo_backend */
     false, /* turbo_rooms_enabled */
     NULL,  /* turbo_room_provider */
     NULL,  /* turbo_room_secret */
-    0      /* turbo_room_max_expiry */
+    0,     /* turbo_room_max_expiry */
+    NULL,  /* turbo_room_lua_script */
+    NULL   /* turbo_audit_log */
 #endif
 };
 
@@ -1552,10 +1555,14 @@ enum EXTRA_OPTS {
   INCLUDE_REASON_STRING_OPT,
 #if defined(TURBO_FEATURES)
   TURBO_OPT,
-  TURBO_API_PORT_OPT
-#if defined(TURBO_AFXDP)
-  ,TURBO_AFXDP_MODE_OPT
-#endif
+  TURBO_API_PORT_OPT,
+  TURBO_BACKEND_OPT,
+  TURBO_ROOMS_OPT,
+  TURBO_ROOM_ID_PROVIDER_OPT,
+  TURBO_ROOM_TOKEN_SECRET_OPT,
+  TURBO_ROOM_TOKEN_EXPIRY_OPT,
+  TURBO_ROOM_LUA_SCRIPT_OPT,
+  TURBO_AUDIT_LOG_OPT
 #endif
 };
 
@@ -1709,11 +1716,15 @@ static const struct myoption long_options[] = {
     {"syslog-facility", required_argument, NULL, SYSLOG_FACILITY_OPT},
     {"cpus", required_argument, NULL, CPUS_OPT},
 #if defined(TURBO_FEATURES)
-    {"turbo", optional_argument, NULL, TURBO_OPT},
-    {"turbo-api-port", required_argument, NULL, TURBO_API_PORT_OPT},
-#if defined(TURBO_AFXDP)
-    {"turbo-afxdp-mode", required_argument, NULL, TURBO_AFXDP_MODE_OPT},
-#endif
+    {"turbo",                    optional_argument, NULL, TURBO_OPT},
+    {"turbo-api-port",           required_argument, NULL, TURBO_API_PORT_OPT},
+    {"turbo-backend",            required_argument, NULL, TURBO_BACKEND_OPT},
+    {"turbo-rooms",              optional_argument, NULL, TURBO_ROOMS_OPT},
+    {"turbo-room-id-provider",   required_argument, NULL, TURBO_ROOM_ID_PROVIDER_OPT},
+    {"turbo-room-token-secret",  required_argument, NULL, TURBO_ROOM_TOKEN_SECRET_OPT},
+    {"turbo-room-token-expiry",  required_argument, NULL, TURBO_ROOM_TOKEN_EXPIRY_OPT},
+    {"turbo-room-lua-script",    required_argument, NULL, TURBO_ROOM_LUA_SCRIPT_OPT},
+    {"turbo-audit-log",          required_argument, NULL, TURBO_AUDIT_LOG_OPT},
 #endif
     {NULL, no_argument, NULL, 0}};
 
@@ -2546,11 +2557,32 @@ static void set_option(int c, char *value) {
   case TURBO_API_PORT_OPT:
     turn_params.turbo_api_port = (uint16_t)atoi(value);
     break;
-#if defined(TURBO_AFXDP)
-  case TURBO_AFXDP_MODE_OPT:
-    turn_params.turbo_afxdp_mode = strdup(value);
+  case TURBO_BACKEND_OPT:
+    free(turn_params.turbo_backend);
+    turn_params.turbo_backend = strdup(value);
     break;
-#endif
+  case TURBO_ROOMS_OPT:
+    turn_params.turbo_rooms_enabled = (value == NULL) || get_bool_value(value);
+    break;
+  case TURBO_ROOM_ID_PROVIDER_OPT:
+    free(turn_params.turbo_room_provider);
+    turn_params.turbo_room_provider = strdup(value);
+    break;
+  case TURBO_ROOM_TOKEN_SECRET_OPT:
+    free(turn_params.turbo_room_secret);
+    turn_params.turbo_room_secret = strdup(value);
+    break;
+  case TURBO_ROOM_TOKEN_EXPIRY_OPT:
+    turn_params.turbo_room_max_expiry = (uint64_t)strtoull(value, NULL, 10);
+    break;
+  case TURBO_ROOM_LUA_SCRIPT_OPT:
+    free(turn_params.turbo_room_lua_script);
+    turn_params.turbo_room_lua_script = strdup(value);
+    break;
+  case TURBO_AUDIT_LOG_OPT:
+    free(turn_params.turbo_audit_log);
+    turn_params.turbo_audit_log = strdup(value);
+    break;
 #endif
   default:
     fprintf(stderr, "\n%s\n", Usage);
@@ -3500,10 +3532,10 @@ int main(int argc, char **argv) {
 
 #if defined(TURBO_FEATURES)
   if (turn_params.turbo_enabled) {
-#if defined(TURBO_AFXDP)
-    if (turn_params.turbo_afxdp_mode && turn_params.turbo_afxdp_mode[0])
-      setenv("TURBO_AFXDP_MODE", turn_params.turbo_afxdp_mode, 1);
-#endif
+    /* Pass AF_XDP sub-mode hint (auto/drv/skb) via environment if requested */
+    if (turn_params.turbo_backend && turn_params.turbo_backend[0])
+      setenv("TURBO_AFXDP_MODE", turn_params.turbo_backend, 1);
+
     if (turn_params.turbo_rooms_enabled && turn_params.turbo_room_provider)
       turbo_rooms_configure(turn_params.turbo_room_provider,
                              turn_params.turbo_room_secret,
@@ -3512,14 +3544,20 @@ int main(int argc, char **argv) {
       TURN_LOG_FUNC(TURN_LOG_LEVEL_ERROR, "Failed to initialize Turbo; aborting.\n");
       exit(-1);
     }
+    if (turbo_api_start(turn_params.turbo_api_port) != 0) {
+      TURN_LOG_FUNC(TURN_LOG_LEVEL_WARNING, "Turbo Admin API failed to start on port %u\n",
+                    turn_params.turbo_api_port);
+    }
   }
 #endif
 
   run_listener_server(&(turn_params.listener));
 
 #if defined(TURBO_FEATURES)
-  if (turn_params.turbo_enabled)
+  if (turn_params.turbo_enabled) {
+    turbo_api_stop();
     turbo_deinit();
+  }
 #endif
 
   disconnect_database();

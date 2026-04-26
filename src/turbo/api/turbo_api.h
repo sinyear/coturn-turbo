@@ -1,36 +1,30 @@
 /*
  * SPDX-License-Identifier: BSD-3-Clause
  *
- * https://opensource.org/license/bsd-3-clause
+ * Admin HTTP API for coturn-turbo.
+ * Design doc §11.
  *
- * Copyright (C) 2011, 2012, 2013 Citrix Systems
- *
- * All rights reserved.
+ * Endpoints:
+ *   GET  /admin/status        — JSON operational summary (§11.2)
+ *   GET  /admin/metrics       — Prometheus text metrics (§11.1)
+ *   POST /admin/turbo-disable — degrade backend to epoll at runtime
+ *   POST /admin/turbo-enable  — reset degrade-request flag
+ *   POST /admin/drain         — stop accepting new allocations
+ *   GET  /admin/drain/status  — drain progress report
  */
 
-#ifndef __TURBO_API__
-#define __TURBO_API__
+#ifndef TURBO_API_H
+#define TURBO_API_H
 
 #include <stdint.h>
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
-/**
- * Start the turbo room management HTTP API server
- * @param port Port to listen on
- * @return 0 on success, -1 on failure
+/*
+ * Start the admin HTTP server in a background thread.
+ * port == 0 → server not started (no-op, returns 0).
  */
-int turbo_api_start(uint16_t port);
+int  turbo_api_start(uint16_t port);
 
-/**
- * Stop the turbo room management HTTP API server
- */
+/* Signal the API server to stop and wait for the background thread. */
 void turbo_api_stop(void);
 
-#ifdef __cplusplus
-}
-#endif
-
-#endif /* __TURBO_API__ */
+#endif /* TURBO_API_H */

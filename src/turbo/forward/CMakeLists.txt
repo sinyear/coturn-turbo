@@ -11,6 +11,8 @@ set(TURBO_FORWARD_SOURCES
     turbo_switch.c
     turbo_fec.h
     turbo_fec.c
+    turbo_audit.h
+    turbo_audit.c
 )
 
 add_library(turbo_forward STATIC ${TURBO_FORWARD_SOURCES})

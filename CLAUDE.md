@@ -51,11 +51,11 @@ coturn-turbo/
 │       │   ├── turbo_switch.h/c    # 零拷贝包克隆和转发
 │       │   └── turbo_audit.h/c     # 审计钩子 (环形缓冲 + Unix Socket)
 │       ├── room/              # 轻量房间广播 (可选)
-│       │   ├── turbo_room.h/c # RCU 保护的成员链表与广播引擎
+│       │   ├── turbo_room.h/c # rwlock 保护的成员链表与广播引擎（惰性创建）
 │       │   ├── turbo_room_provider.h # 可插拔身份识别接口
-│       │   ├── provider_static.c    # 静态用户名解析
+│       │   ├── provider_static.c    # 静态用户名解析 (room<ID>:<member>)
 │       │   ├── provider_token_hmac.c # HMAC-SHA256 Token 验证
-│       │   └── provider_lua.c       # Lua 脚本自定义逻辑
+│       │   └── provider_lua.c       # Lua 脚本自定义逻辑 (可选，--turbo-lua)
 │       ├── api/               # Admin HTTP API
 │       │   ├── turbo_api.h/c  # /admin/metrics, /status, /turbo-disable, /drain
 │       └── common/            # 共享工具

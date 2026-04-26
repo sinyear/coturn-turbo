@@ -368,13 +368,15 @@ typedef struct _turn_params_ {
   bool include_reason_string;
 
 #if defined(TURBO_FEATURES)
-  bool turbo_enabled;
+  bool     turbo_enabled;
   uint16_t turbo_api_port;
-  char *turbo_afxdp_mode;         /* "auto", "drv", or "skb" — only meaningful with AF_XDP backend */
-  bool turbo_rooms_enabled;       /* --turbo-rooms: enable room broadcasting */
-  char *turbo_room_provider;      /* "static" | "token_hmac" */
-  char *turbo_room_secret;        /* shared secret for token_hmac provider */
-  uint64_t turbo_room_max_expiry; /* max token lifetime in seconds (0 = unlimited) */
+  char    *turbo_backend;          /* "io_uring" | "af_xdp" (runtime hint; actual backend from compile flags) */
+  bool     turbo_rooms_enabled;    /* --turbo-rooms: enable room broadcasting */
+  char    *turbo_room_provider;    /* "static" | "token_hmac" | "lua" */
+  char    *turbo_room_secret;      /* shared secret for token_hmac provider */
+  uint64_t turbo_room_max_expiry;  /* max token lifetime in seconds (0 = unlimited) */
+  char    *turbo_room_lua_script;  /* Lua script path for lua provider */
+  char    *turbo_audit_log;        /* Unix socket path for audit log ("" = disabled) */
 #endif
 } turn_params_t;
 

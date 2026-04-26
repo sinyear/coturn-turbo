@@ -168,7 +168,7 @@ turbo-api-port=8080                  # Admin API 监听端口
 # turbo-stun-burst-limit 4000        # STUN 突发容忍 (默认 4000)
 
 # ========== AF_XDP 后端 (当 turbo-backend=af_xdp 时) ==========
-# turbo-afxdp-mode=auto             # auto | drv | skb (默认 auto)
+# turbo-backend=af_xdp              # io_uring (默认) | af_xdp
 # turbo-xdp-iface=eth0              # 绑定网卡
 
 # ========== 房间广播 (可选) ==========
@@ -196,7 +196,7 @@ log-file=/var/log/turnserver/turbo.log
 | `turbo-api-listen-ip` | string | 0.0.0.0 | Admin API 监听 IP |
 | `turbo-stun-pps-limit` | int | 2000 | STUN 包速率限制 |
 | `turbo-stun-burst-limit` | int | 4000 | STUN 突发容忍 |
-| `turbo-afxdp-mode` | string | auto | XDP 模式：`auto`, `drv`, `skb` |
+| `turbo-backend` | string | io_uring | 网络后端：`io_uring`, `af_xdp` |
 | `turbo-xdp-iface` | string | (无) | AF_XDP 绑定网卡 |
 | `turbo-rooms` | flag | off | 启用房间广播功能 |
 | `turbo-room-id-provider` | string | (无) | 房间身份提供者：`static`, `token_hmac`, `lua_script` |
@@ -232,7 +232,7 @@ sudo sysctl -w net.core.rmem_max=2147483647
 sudo sysctl -w net.core.rmem_default=524288
 ```
 
-如遇兼容性问题，可使用 `turbo-afxdp-mode=skb` 回退到 SKB 通用模式（性能略低但兼容性广）。
+如遇兼容性问题，可不指定 `turbo-backend`（默认使用 io_uring），或在启动时设置 `TURBO_AFXDP_MODE=skb` 环境变量回退到 SKB 通用模式。
 
 ### 5.3 保险丝与降级
 
@@ -420,7 +420,7 @@ curl -X POST http://localhost:8080/admin/turbo-disable
 | :--- | :--- | :--- |
 | Turbo 未生效 | 未加 `--turbo` 启动 | 查看 `/admin/status`，`turbo_enabled` 应为 true |
 | `fastpath_hit_rate` 低 | 客户端大量使用 Send Indication 且 L1 未命中 | 开启 `turbo-l1-warmup`，检查网络是否频繁换端口 |
-| AF_XDP 启动失败 | 网卡驱动不支持 | 查看日志，尝试 `turbo-afxdp-mode=skb` 或切换 io_uring |
+| AF_XDP 启动失败 | 网卡驱动不支持 | 查看日志，切换至默认 `turbo-backend=io_uring` 或设 `TURBO_AFXDP_MODE=skb` |
 | 房间广播无效 | Provider 配置错误或 Token 验证失败 | 查看日志，验证 Token 生成逻辑 |
 | L1 未命中告警 | 客户端更换了源端口 | 检查 NAT 行为，可能需调整 L1 缓存策略 |
 

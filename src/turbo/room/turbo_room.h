@@ -109,4 +109,7 @@ uint32_t turbo_room_member_count(const char *room_id);
 /* Overflow counter (atomic, for Prometheus) */
 extern _Atomic uint64_t g_turbo_room_member_overflow;
 
+/* Active room count (incremented on lazy create, decremented on auto-destroy) */
+extern _Atomic uint32_t g_turbo_active_rooms;
+
 #endif /* TURBO_ROOM_H */

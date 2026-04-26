@@ -26,6 +26,7 @@ static pthread_rwlock_t    g_rooms_lock = PTHREAD_RWLOCK_INITIALIZER;
 static uint32_t            g_max_members = 50;
 
 _Atomic uint64_t g_turbo_room_member_overflow = 0;
+_Atomic uint32_t g_turbo_active_rooms = 0;
 
 /* ------------------------------------------------------------------ */
 /* Internal helpers                                                     */
@@ -57,6 +58,7 @@ static void destroy_room_locked(struct turbo_room *room) {
     struct turbo_room **pp = &g_buckets[b];
     while (*pp && *pp != room) pp = &(*pp)->next;
     if (*pp) *pp = room->next;
+    atomic_fetch_sub_explicit(&g_turbo_active_rooms, 1, __ATOMIC_RELAXED);
 
     /* Free members */
     struct turbo_room_member *m = room->members;
@@ -126,6 +128,7 @@ int turbo_room_add_member(const char *room_id,
         uint32_t b = room_bucket(room_id);
         room->next = g_buckets[b];
         g_buckets[b] = room;
+        atomic_fetch_add_explicit(&g_turbo_active_rooms, 1, __ATOMIC_RELAXED);
     }
 
     /* Check member cap */
