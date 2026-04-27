@@ -264,12 +264,16 @@ struct turbo_room_provider_ops my_provider_ops = {
 
 ### 测试
 ```bash
-# 基本流测试
-cd test/
-./test_turbo_fastpath
+# 一键测试全部四种模式（标准/io_uring/AF_XDP/rooms）
+./test_all_modes.sh
 
-# 使用 turnutils_uclient 进行端到端测试
-turnutils_uclient -t -W <turn_secret> -p 3478 <turn_server>
+# 单模式测试
+./test_mode.sh 2            # Turbo + io_uring
+./test_mode.sh 2 --no-test  # 仅编译安装
+
+# WebRTC 自动化测试（需 TURN 服务器已运行）
+cd .claude/skills/webrtc-coturn-test-skill
+node regular-diagnostic.js
 ```
 
 ### 调试

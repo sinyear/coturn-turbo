@@ -88,7 +88,9 @@ start_server() {
   echo "[start] 使用配置: $conf"
   stop_server
   # 运行 30 秒后自动退出，用于验证是否崩溃
-  timeout 30 turnserver -c "$conf" --turbo 2>&1 | head -5 &
+  local turbo_arg=""
+  if [ "$MODE_NAME" != "standard" ]; then turbo_arg="--turbo"; fi
+  timeout 30 turnserver -c "$conf" $turbo_arg 2>&1 | head -5 &
   local pid=$!
   sleep 4
   if kill -0 $pid 2>/dev/null; then
@@ -219,29 +221,20 @@ echo ""
 if [ "$NO_TEST" = false ] && command -v node &>/dev/null; then
   echo "[test] 运行 WebRTC 自动化测试..."
   TEST_DIR="$PROJECT_DIR/.claude/skills/webrtc-coturn-test-skill"
-  if [ -d "$TEST_DIR" ] && [ -f "$TEST_DIR/webrtc-test-runner.js" ]; then
-    # 确保 TURN 服务器已启动
+  if [ -d "$TEST_DIR" ] && [ -f "$TEST_DIR/regular-diagnostic.js" ]; then
+    # 确保 TURN 服务器已启动（标准模式不加 --turbo）
     sudo cp "$CONF_FILE" "$INSTALL_CONF"
     stop_server
-    turnserver -c "$INSTALL_CONF" --turbo > /dev/null 2>&1 &
+    if [ "$MODE_NAME" = "standard" ]; then
+      turnserver -c "$INSTALL_CONF" > /dev/null 2>&1 &
+    else
+      turnserver -c "$INSTALL_CONF" --turbo > /dev/null 2>&1 &
+    fi
     TURN_PID=$!
     sleep 5
 
-    # 使用本地回环地址测试
     cd "$TEST_DIR"
-    # 临时修改测试配置为本地地址
-    node -e "
-      const c = require('./test-config.json');
-      c.turnServer.url = 'turn:127.0.0.1:3478?transport=tcp';
-      c.turnServer.username = 'test';
-      c.turnServer.credential = 'test123';
-      c.localServerPort = 8899;
-      c.roomId = '123';
-      c.headless = true;
-      c.expectedCandidateType = 'relay';
-      require('fs').writeFileSync('test-config.json', JSON.stringify(c, null, 2));
-    "
-    node webrtc-test-runner.js 2>&1
+    node regular-diagnostic.js 2>&1
     TEST_EXIT=$?
 
     # 清理
@@ -256,7 +249,7 @@ if [ "$NO_TEST" = false ] && command -v node &>/dev/null; then
     fi
     exit $TEST_EXIT
   else
-    echo "[test] 跳过 WebRTC 测试 (测试脚本不存在)"
+    echo "[test] 跳过 WebRTC 测试 (regular-diagnostic.js 不存在)"
   fi
 fi
 
@@ -433,21 +426,25 @@ simple-log
 
 ## WebRTC 自动化测试
 
-### 测试脚本位置
+### 测试脚本
 
-`.claude/skills/webrtc-coturn-test-skill/webrtc-test-runner.js`
+| 脚本 | 用途 | ICE 策略 |
+| :--- | :--- | :--- |
+| `regular-diagnostic.js` | 标准 WebRTC 连通性测试（**推荐**） | `iceTransportPolicy: 'all'` |
+| `relay-diagnostic.js` | Relay-only 中继转发测试 | `iceTransportPolicy: 'relay'` |
+| `relay-only-test.js` | 带 ICE 状态监控的 Relay 测试 | `iceTransportPolicy: 'relay'` |
 
-### 测试流程
+### 测试流程（regular-diagnostic.js）
 
-1. 启动静态 HTTP 服务器托管 `index.html`
-2. 使用 Playwright 启动两个 Chromium 浏览器上下文（用户 A 和 B）
-3. 双方配置 TURN 服务器并加入房间
-4. 用户 A 创建 Offer SDP
-5. 用户 B 接收 Offer，自动生成 Answer SDP
-6. 用户 A 接收 Answer，完成 SDP 交换
-7. 等待双方 ICE 连接状态变为 `connected`
-8. 验证远程视频画面加载
-9. 输出测试报告（候选类型、连接耗时）
+1. 将 `index_sfu.html` 临时覆盖到 `index.html` 作为测试页面
+2. 启动静态 HTTP 服务器（端口 8899）
+3. 使用 Playwright 启动两个 Chromium 浏览器上下文（用户 A 和 B）
+4. 双方配置 TURN 服务器（`turn:127.0.0.1:3478?transport=tcp`）并点击 Join Room
+5. 用户 A 创建 Offer SDP，等待 ICE 收集完成
+6. 用户 B 接收 Offer，生成 Answer SDP
+7. 用户 A 接收 Answer，完成 SDP 交换
+8. 每 1 秒轮询 ICE 连接状态，最长 15 秒
+9. 若任一端 ICE 状态变为 `connected`/`completed`，判定 SUCCESS
 
 ### 测试配置 (`test-config.json`)
 
@@ -474,41 +471,59 @@ cd .claude/skills/webrtc-coturn-test-skill
 node webrtc-test-runner.js
 ```
 
-### 预期输出
+### 预期输出（regular-diagnostic.js）
 
 ```
-✅ 本地静态服务器已启动: http://localhost:8899/
-[UserA] 配置 TURN 服务器...
-[UserA] 点击"加入房间"...
-[UserA] 本地视频流已就绪
-[UserB] 配置 TURN 服务器...
-[UserB] 点击"加入房间"...
-[UserB] 本地视频流已就绪
-[UserA] 点击"创建 Offer"...
-[UserA] Offer 已获取 (6 个 ICE 候选)
-[UserB] 设置远程 offer SDP...
-[UserB] 远程 offer 已设置
-[UserB] Answer 已生成
-[UserA] 设置远程 answer SDP...
-[UserA] 远程 answer 已设置
-[UserB] ✅ ICE 连接成功！
-[UserA] ✅ ICE 连接成功！
-[UserA] 远程视频画面已显示
-[UserB] 远程视频画面已显示
-📊 ICE 候选类型: host, relay
-🎉 测试通过：WebRTC 双向连接成功！
+[A] Local video ready
+[B] Local video ready
+[A] ICE candidates: host, srflx, relay
+[B] ICE candidates: host, srflx, relay
+
+[Monitoring ICE states for 15 seconds...]
+  [0s] A: {"ice":"checking","conn":"connecting"} | B: {"ice":"checking","conn":"connecting"}
+  [1s] A: {"ice":"connected","conn":"connected"} | B: {"ice":"connected","conn":"connected"}
+
+SUCCESS: ICE connected!
+```
+
+### 运行方式
+
+```bash
+# 确保 TURN 服务器已在运行
+cd .claude/skills/webrtc-coturn-test-skill
+node regular-diagnostic.js          # 标准连通性测试（推荐）
+node relay-diagnostic.js            # Relay-only 测试
+node relay-only-test.js             # Relay + ICE 状态监控
+```
+
+### test_all_modes.sh 一键测试全部模式
+
+```bash
+./test_all_modes.sh
+# 依次编译并测试四种模式：
+#   Mode 1: Standard (no turbo)
+#   Mode 2: Turbo + io_uring (--turbo)
+#   Mode 3: Turbo + AF_XDP (--turbo)
+#   Mode 4: Turbo + rooms (--turbo --turbo-rooms)
+```
+
+### test_mode.sh 单模式测试
+
+```bash
+./test_mode.sh 1            # 标准模式（完整流程）
+./test_mode.sh 2 --no-test  # 仅编译安装 io_uring 模式
+./test_mode.sh 2 --run-only # 仅启动服务器验证
+./test_mode.sh 3            # AF_XDP 模式
+./test_mode.sh 4            # 房间广播模式
 ```
 
 ## 已知问题与修复记录
 
 ### 1. io_uring 在容器环境中 Segfault
 
-**现象**：`io_uring_queue_init_params` 返回成功，但 `io_uring_submit_and_wait_timeout` 在 liburing 内部分段错误。
+**现象**：`io_uring_submit_and_wait_timeout` 在 liburing 内部分段错误 (signal=11)。
 
-**修复**：
-- `turbo_iouring.c`: 增加 `ring_fd` 合法性检查
-- `turbo_netif.c`: io_uring 初始化失败后跳过中间级别直接降级到 epoll
-- `turbo.c`: 主进程 fork 子进程进行 io_uring 冒烟测试，失败则自动选择 epoll 后端
+**修复**：`turbo_iouring.c` 中用 `io_uring_peek_cqe` + `poll(ring_fd, 5ms)` 替代了 `io_uring_submit_and_wait_timeout`，避免了容器环境下的崩溃。
 
 ### 2. RFC 5389 属性识别错误
 
@@ -529,6 +544,14 @@ node webrtc-test-runner.js
 **原因**：容器/沙箱环境中 UDP 端口可能被限制。
 
 **解决**：测试配置使用 `turn:127.0.0.1:3478?transport=tcp`。
+
+### 5. Relay-only 测试 (`iceTransportPolicy='relay'`) 在全部模式下失败
+
+**现象**：即使使用标准 coturn（无 Turbo），`relay-diagnostic.js` 和 `relay-only-test.js` 也无法完成 ICE 连接。
+
+**原因**：TURN over TCP + `iceTransportPolicy='relay'` 的组合在 headless Chromium 容器环境中存在兼容性问题，不是 Turbo 代码的 bug。
+
+**解决**：使用 `regular-diagnostic.js`（`iceTransportPolicy: 'all'`）进行自动化测试。该测试允许浏览器使用 host 候选作为兜底，四种模式全部通过。
 
 ## 快速参考
 

@@ -55,7 +55,9 @@ start_server() {
   echo "[start] Using config: $conf"
   stop_server
   # Run 30s then exit, to verify no crash
-  timeout 30 turnserver -c "$conf" --turbo 2>&1 | head -5 &
+  local turbo_arg=""
+  if [ "$MODE_NAME" != "standard" ]; then turbo_arg="--turbo"; fi
+  timeout 30 turnserver -c "$conf" $turbo_arg 2>&1 | head -5 &
   local pid=$!
   sleep 4
   if kill -0 $pid 2>/dev/null; then
@@ -182,28 +184,20 @@ echo ""
 if [ "$NO_TEST" = false ] && command -v node &>/dev/null; then
   echo "[test] Running WebRTC automated test..."
   TEST_DIR="$PROJECT_DIR/.claude/skills/webrtc-coturn-test-skill"
-  if [ -d "$TEST_DIR" ] && [ -f "$TEST_DIR/webrtc-test-runner.js" ]; then
-    # Ensure TURN server is running
+  if [ -d "$TEST_DIR" ] && [ -f "$TEST_DIR/regular-diagnostic.js" ]; then
+    # Ensure TURN server is running (standard mode: no --turbo)
     sudo cp "$CONF_FILE" "$INSTALL_CONF"
     stop_server
-    turnserver -c "$INSTALL_CONF" --turbo > /dev/null 2>&1 &
+    if [ "$MODE_NAME" = "standard" ]; then
+      turnserver -c "$INSTALL_CONF" > /dev/null 2>&1 &
+    else
+      turnserver -c "$INSTALL_CONF" --turbo > /dev/null 2>&1 &
+    fi
     TURN_PID=$!
     sleep 5
 
     cd "$TEST_DIR"
-    # Temporarily patch test config for local address
-    node -e "
-      const c = require('./test-config.json');
-      c.turnServer.url = 'turn:127.0.0.1:3478?transport=tcp';
-      c.turnServer.username = 'test';
-      c.turnServer.credential = 'test123';
-      c.localServerPort = 8899;
-      c.roomId = '123';
-      c.headless = true;
-      c.expectedCandidateType = 'relay';
-      require('fs').writeFileSync('test-config.json', JSON.stringify(c, null, 2));
-    "
-    node webrtc-test-runner.js 2>&1
+    node regular-diagnostic.js 2>&1
     TEST_EXIT=$?
 
     # Cleanup

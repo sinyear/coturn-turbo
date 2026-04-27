@@ -91,7 +91,7 @@ echo ""
 echo "=== MODE 3: Turbo + AF_XDP (--turbo) ==="
 cd "$COTURN_DIR"
 make clean > /dev/null 2>&1
-./configure --turbo --turbo-backend=afxdp > /dev/null 2>&1
+./configure --turbo --turbo-backend=af_xdp > /dev/null 2>&1
 make -j$(nproc) > /dev/null 2>&1
 sudo make install > /dev/null 2>&1
 

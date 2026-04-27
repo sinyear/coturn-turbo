@@ -1,22 +1,22 @@
 # coturn-turbo 构建、打包、部署与测试指南
 
-本文档描述 coturn-turbo 三种构建模式的完整生命周期：**标准 TURN 模式**、**DPDK Turbo 模式**、**AF_XDP Turbo 模式**。
+本文档描述 coturn-turbo 四种构建模式的完整生命周期：**标准模式**、**Turbo + io_uring**、**Turbo + AF_XDP**、**Turbo + 房间广播**。
 
 ---
 
 ## 目录
 
 - [一、环境准备](#一环境准备)
-- [二、三种模式构建](#二三种模式构建)
-  - [2.1 标准 TURN 模式](#21-标准-turn-模式)
-  - [2.2 DPDK Turbo 模式](#22-dpdk-turbo-模式)
-  - [2.3 AF_XDP Turbo 模式](#23-af_xdp-turbo-模式)
+- [二、四种模式构建](#二四种模式构建)
+  - [2.1 标准模式](#21-标准模式)
+  - [2.2 Turbo + io_uring 模式](#22-turbo--io_uring-模式)
+  - [2.3 Turbo + AF_XDP 模式](#23-turbo--af_xdp-模式)
+  - [2.4 Turbo + 房间广播模式](#24-turbo--房间广播模式)
 - [三、打包](#三打包)
 - [四、部署](#四部署)
   - [4.1 标准模式部署](#41-标准模式部署)
-  - [4.2 DPDK 模式部署](#42-dpdk-模式部署)
-  - [4.3 AF_XDP 模式部署](#43-af_xdp-模式部署)
-  - [4.4 Conductor 调度服务部署](#44-conductor-调度服务部署)
+  - [4.2 Turbo + io_uring 模式部署](#42-turbo--io_uring-模式部署)
+  - [4.3 Turbo + AF_XDP 模式部署](#43-turbo--af_xdp-模式部署)
 - [五、运行](#五运行)
 - [六、测试](#六测试)
 - [七、故障排查](#七故障排查)
@@ -42,17 +42,18 @@ yum install -y gcc gcc-c++ make openssl-devel libevent-devel libsqlite3-devel pk
 
 | 模式 | 额外依赖 | 内核要求 |
 |------|----------|----------|
-| 标准 TURN | 无 | 任意 Linux |
-| DPDK Turbo | DPDK ≥26.03、NUMA 库 | 无强制要求 |
-| AF_XDP Turbo | libbpf、libxdp、libjson-c、clang/llvm | Linux ≥5.4（推荐 ≥5.10） |
+| 标准 | 无 | 任意 Linux |
+| Turbo + io_uring | liburing-dev (≥2.0) | Linux ≥5.6 |
+| Turbo + AF_XDP | libbpf-dev、libxdp-dev、libjson-c-dev、clang/llvm | Linux ≥5.4（推荐 ≥5.10）|
+| Turbo + 房间 | 同 io_uring，可选 LuaJIT（Lua Provider）| 同 io_uring |
 
 ---
 
-## 二、三种模式构建
+## 二、四种模式构建
 
-### 2.1 标准 TURN 模式
+### 2.1 标准模式
 
-完全兼容原生 coturn，无 Turbo 扩展，适合不需要 SFU 广播的场景。
+完全兼容原生 coturn，无 Turbo 扩展，适合不需要单端口收敛和房间广播的场景。
 
 ```bash
 cd coturn-turbo
@@ -68,75 +69,19 @@ sudo make install
 ```
 
 **构建产物**：
-- `bin/turnserver` — TURN/STUN 主服务
-- `bin/turnadmin` — 用户数据库管理工具
-- `bin/turnutils_*` — 测试工具集
+- `turnserver` — TURN/STUN 主服务
+- `turnadmin` — 用户数据库管理工具
+- `turnutils_*` — 测试工具集
 
-### 2.2 DPDK Turbo 模式
+### 2.2 Turbo + io_uring 模式
 
-最高性能模式，适合物理服务器、专用网卡场景。
-
-#### 2.2.1 安装 DPDK
-
-```bash
-# 安装 DPDK 编译依赖
-apt-get install -y meson ninja-build libnuma-dev python3-pyelftools
-
-# 下载并编译 DPDK（推荐 26.03+）
-wget https://fast.dpdk.org/rel/dpdk-26.03.tar.xz
-tar xJf dpdk-26.03.tar.xz
-cd dpdk-26.03
-meson build --prefix=/usr --libdir=/usr/lib/x86_64-linux-gnu
-cd build
-ninja
-sudo ninja install
-sudo ldconfig
-
-# 验证 DPDK 安装
-pkg-config --modversion libdpdk
-```
-
-#### 2.2.2 编译 coturn-turbo
+默认高性能模式，使用 io_uring 异步 I/O 后端。
 
 ```bash
 cd coturn-turbo
 
-# 生成 Makefile（configure 脚本会自动检查 DPDK 依赖）
-./configure --turbo --use-dpdk
-# 生成 Makefile（加支持断点调试信息）
-./configure --turbo --use-dpdk  CFLAGS="-g -O0"
-# 编译
-make -j$(nproc)
-
-# 安装
-sudo make install
-```
-
-> **关键**：`--turbo --use-dpdk` 是 configure 脚本的正式选项。脚本会自动检查 DPDK ≥26.03，通过后注入 `-DTURN_TURBO -DTURN_USE_DPDK` 到编译标志。Makefile 检测到这些宏后会编译 `turbo_dpdk.c` 并链接 `libdpdk`。
-
-### 2.3 AF_XDP Turbo 模式
-
-高性能且可与内核共享网卡，适合云服务器、虚拟化环境。
-
-#### 2.3.1 安装 AF_XDP 依赖
-
-```bash
-# Ubuntu/Debian（内核 ≥5.4）
-apt-get install -y clang llvm libbpf-dev libxdp-dev libjson-c-dev
-
-# CentOS/RHEL（需 EPEL + elrepo）
-yum install -y clang llvm libbpf-devel libxdp-devel json-c-devel
-```
-
-#### 2.3.2 编译 coturn-turbo
-
-```bash
-cd coturn-turbo
-
-# 生成 Makefile（configure 脚本会自动检查 AF_XDP 依赖）
-./configure --turbo --use-afxdp
-# 生成 Makefile（加支持断点调试信息）
-./configure --turbo --use-afxdp  CFLAGS="-g -O0"
+# 生成 Makefile
+./configure --turbo
 
 # 编译
 make -j$(nproc)
@@ -145,7 +90,43 @@ make -j$(nproc)
 sudo make install
 ```
 
-> **关键**：`--turbo --use-afxdp` 是 configure 脚本的正式选项。脚本会自动检查 libbpf、libxdp、libjson-c，通过后注入 `-DTURN_TURBO -DTURN_USE_AFXDP` 到编译标志。Makefile 检测到这些宏后会编译 `turbo_af_xdp.c` 并链接 `-lbpf -lxdp -ljson-c`。
+**关键**：`--turbo` 启用 Turbo 模式，默认使用 io_uring 网络后端。需内核 ≥5.6。
+
+### 2.3 Turbo + AF_XDP 模式
+
+极致性能模式，使用 AF_XDP 内核旁路后端。
+
+```bash
+cd coturn-turbo
+
+# 生成 Makefile
+./configure --turbo --turbo-backend=af_xdp
+
+# 编译
+make -j$(nproc)
+
+# 安装
+sudo make install
+```
+
+**关键**：`--turbo-backend=af_xdp` 选择 AF_XDP 后端。需 libbpf、libxdp、clang。
+
+### 2.4 Turbo + 房间广播模式
+
+包含 io_uring 后端 + 房间广播引擎。
+
+```bash
+cd coturn-turbo
+
+# 生成 Makefile
+./configure --turbo --turbo-rooms
+
+# 编译
+make -j$(nproc)
+
+# 安装
+sudo make install
+```
 
 ---
 
@@ -165,7 +146,7 @@ cp -r examples/scripts /tmp/coturn-turnserver-pkg/
 cp sqlite/turndb /tmp/coturn-turnserver-pkg/var/db/ 2>/dev/null || true
 ```
 
-### 3.2 Turbo 模式打包（DPDK / AF_XDP）
+### 3.2 Turbo 模式打包（io_uring / AF_XDP / rooms）
 
 ```bash
 PKG_DIR=/tmp/coturn-turbo-pkg
@@ -180,19 +161,6 @@ cp conf/turbo.conf.example ${PKG_DIR}/etc/turbo.conf.example
 
 # 复制数据库
 cp sqlite/turndb ${PKG_DIR}/var/db/ 2>/dev/null || true
-
-# 复制部署脚本
-cp scripts/install_coturn_on_aws_ec2.sh ${PKG_DIR}/scripts/ 2>/dev/null || true
-
-# 如果是 DPDK 模式，附加说明
-cat > ${PKG_DIR}/README.txt << 'EOF'
-coturn-turbo (DPDK 模式) 部署包
-================================
-1. 配置大页内存: echo 1024 | sudo tee /sys/kernel/mm/hugepages/hugepages-2048kB/nr_hugepages
-2. 绑定网卡到 DPDK: sudo dpdk-devbind.py -b vfio-pci <PCI地址>
-3. 编辑 etc/turnserver.conf，设置 turbo=true 和 turbo-api-port
-4. 以 root 运行: sudo bin/turnserver -c etc/turnserver.conf --turbo -o
-EOF
 
 # 打包
 cd /tmp && tar czf coturn-turbo-$(date +%Y%m%d).tar.gz coturn-turbo-pkg/
@@ -248,75 +216,45 @@ sudo ufw allow 3478/tcp
 sudo ufw allow 49152:65535/udp
 ```
 
-### 4.2 DPDK 模式部署
+### 4.2 Turbo + io_uring 模式部署
 
-#### 4.2.1 大页内存配置
-
-```bash
-# 分配 1024 个 2MB 大页（共 2GB）
-echo 1024 | sudo tee /sys/kernel/mm/hugepages/hugepages-2048kB/nr_hugepages
-
-# 挂载大页文件系统
-sudo mkdir -p /mnt/huge
-sudo mount -t hugetlbfs nodev /mnt/huge
-
-# 验证
-grep Huge /proc/meminfo
-```
-
-#### 4.2.2 网卡绑定
-
-```bash
-# 加载 VFIO 驱动
-sudo modprobe vfio-pci
-
-# 查看网卡 PCI 地址
-ip link show
-# 找到目标网卡对应的 PCI 地址，如 0000:02:00.0
-
-# 将网卡从内核驱动解绑，绑定到 vfio-pci
-sudo dpdk-devbind.py -b vfio-pci 0000:02:00.0
-
-# 验证绑定状态
-dpdk-devbind.py --status
-```
-
-#### 4.2.3 配置文件
+#### 4.2.1 配置文件
 
 编辑 `/etc/turnserver/turnserver.conf`：
 
 ```ini
 listening-port=3478
 listening-ip=0.0.0.0
-relay-ip=0.0.0.0
-listening-device=0000:02:00.0
+relay-ip=10.0.0.1
+external-ip=122.51.14.87/10.0.0.1
 realm=north
 lt-cred-mech
 user=claude:password
 
-# Turbo 模式（必须）
-turbo=true
-turbo-api-port=9999
+# Turbo 模式
+turbo
+turbo-backend=io_uring
+turbo-l1-warmup enable
+turbo-api-port=8080
 ```
 
-#### 4.2.4 启动
+#### 4.2.2 启动
 
 ```bash
-# DPDK 模式需要 root 权限
 sudo turnserver -c /etc/turnserver/turnserver.conf --turbo -o -v
 ```
 
-#### 4.2.5 部署要求
+#### 4.2.3 部署要求
 
 | 维度 | 要求 |
 |------|------|
-| CPU | x86-64，建议预留 1-2 个核心给 DPDK（isolcpus） |
-| 内存 | 大页内存 ≥1GB |
-| 网卡 | DPDK 兼容（Intel X500/700/800、Mellanox ConnectX-4/5/6） |
-| 权限 | 需要 root 或 CAP_SYS_ADMIN |
-| BIOS | 建议启用 VT-d/AMD-Vi (IOMMU) |
+| 内核 | Linux ≥5.6 |
+| 运行依赖 | liburing |
+| 权限 | 需要 root 或 CAP_NET_BIND_SERVICE（端口 3478） |
 
-### 4.3 AF_XDP 模式部署
+### 4.3 Turbo + AF_XDP 模式部署
+
+### 4.3 Turbo + AF_XDP 模式部署
 
 #### 4.3.1 内核检查
 
@@ -338,10 +276,10 @@ AF_XDP 支持三种运行模式：
 | 模式 | 说明 | 性能 | 兼容性 |
 |------|------|------|--------|
 | `auto` | 自动检测：先尝试 DRV 原生零拷贝，失败降级 SKB | 最优 | 最佳 |
-| `drv` | XDP 驱动原生模式（真正的零拷贝） | 最高 | 需网卡驱动支持（Intel i40e/ice/ixgbe、Mellanox mlx5） |
+| `drv` | XDP 驱动原生模式（真正的零拷贝） | 最高 | 需网卡驱动支持 |
 | `skb` | SKB 内核回退模式（通过内核协议栈） | 中等 | 几乎所有 Linux ≥5.4 |
 
-**重要：无论哪种模式，代码都会自动加载 XDP 过滤程序（`xdp_prog.o`）**，该程序仅将 TURN 端口的 UDP 流量 redirect 到 AF_XDP socket，其他流量（SSH、HTTP 等）正常进入内核协议栈，**不会导致断网**。
+**重要**：无论哪种模式，代码都会自动加载 XDP 过滤程序（`xdp_prog.o`），该程序仅将 TURN 端口的 UDP 流量 redirect 到 AF_XDP socket，其他流量（SSH、HTTP 等）正常进入内核协议栈，**不会导致断网**。
 
 配置方式：
 ```ini
@@ -361,18 +299,21 @@ sudo turnserver -c /etc/turnserver/turnserver.conf --turbo --turbo-afxdp-mode=au
 ```ini
 listening-port=3478
 listening-ip=0.0.0.0
-relay-ip=0.0.0.0
-listening-device=eth0
+relay-ip=10.0.0.1
+external-ip=122.51.14.87/10.0.0.1
 realm=north
 lt-cred-mech
 user=claude:password
 
 # Turbo 模式
-turbo=true
-turbo-api-port=9999
+turbo
+turbo-backend=af_xdp
+turbo-l1-warmup enable
+turbo-api-port=8080
 
 # AF_XDP 模式选择（auto/drv/skb，默认 auto）
 turbo-afxdp-mode=auto
+turbo-xdp-iface=eth0
 ```
 
 #### 4.3.4 启动
@@ -380,10 +321,6 @@ turbo-afxdp-mode=auto
 ```bash
 # AF_XDP 模式需要 root 权限（加载 XDP BPF 程序）
 sudo turnserver -c /etc/turnserver/turnserver.conf --turbo -o -v
-
-# 显式指定模式
-sudo turnserver -c /etc/turnserver/turnserver.conf --turbo --turbo-afxdp-mode=drv -o -v
-sudo turnserver -c /etc/turnserver/turnserver.conf --turbo --turbo-afxdp-mode=skb -o -v
 ```
 
 #### 4.3.5 部署要求
@@ -404,27 +341,27 @@ sudo turnserver -c /etc/turnserver/turnserver.conf --turbo --turbo-afxdp-mode=sk
 - SSH 和其他服务保持可达
 - 性能略低于 DRV 模式，但仍高于纯内核协议栈处理
 
-### 4.4 Conductor 调度服务部署
+### 4.4 Turbo + 房间广播模式部署
 
-Conductor 是独立进程，用于多节点集群的房间调度与信令管理。
+编辑 `/etc/turnserver/turnserver.conf`：
 
-#### 4.4.1 编译
+```ini
+# 基础 TURN 配置同上...
 
-> **注意**：Conductor 仅通过 CMake 构建，不在 Makefile 中。
-
-```bash
-cd coturn-turbo
-mkdir -p build_conductor && cd build_conductor
-cmake .. -DWITH_HIREDIS=ON  # 如需 Redis 支持
-make conductor -j$(nproc)
+# Turbo + 房间
+turbo
+turbo-backend=io_uring
+turbo-l1-warmup enable
+turbo-api-port=8080
+turbo-rooms
+turbo-room-id-provider token_hmac
+turbo-room-token-secret your_shared_secret
+turbo-room-token-expiry 3600
 ```
 
-#### 4.4.2 启动
-
+启动：
 ```bash
-# 需要 Redis 作为后端
-./conductor --listen 0.0.0.0 --port 8080 --ws-port 8765 \
-    --redis "redis://127.0.0.1:6379/0" --node-id "conductor-1"
+sudo turnserver -c /etc/turnserver/turnserver.conf --turbo -o -v
 ```
 
 ---
@@ -445,10 +382,9 @@ turnserver -c /etc/turnserver/turnserver.conf -o \
     --use-auth-secret --static-auth-secret=mysecret
 ```
 
-### 5.2 Turbo 模式（DPDK / AF_XDP）
+### 5.2 Turbo 模式（io_uring / AF_XDP / rooms）
 
-> **警告**：`--turbo` 选项**仅在编译时包含 `-DTURN_USE_DPDK` 或 `-DTURN_USE_AFXDP` 时可用**。
-> 标准模式（无 Turbo 编译）设置 `--turbo` 会导致 `turbo_netif_init()` 返回 NULL，服务器直接 exit(-1)。
+> **警告**：`--turbo` 选项**仅在编译时启用了 Turbo 时可用**。标准模式（无 `--turbo` 编译）设置 `--turbo` 会导致启动失败。
 
 ```bash
 # 前台运行（调试）
@@ -459,7 +395,7 @@ sudo turnserver -c /etc/turnserver/turnserver.conf --turbo -o -v
 
 # 指定 API 端口
 sudo turnserver -c /etc/turnserver/turnserver.conf \
-    --turbo --turbo-api-port 9999 -o -v
+    --turbo --turbo-api-port 8080 -o -v
 ```
 
 ### 5.3 验证运行状态
@@ -470,13 +406,12 @@ ps aux | grep turnserver
 
 # 检查端口
 ss -ulnp | grep 3478
-ss -ulnp | grep 9999   # Turbo API 端口
 
 # 检查日志
-tail -f /var/log/turnserver/turnserver_*.log
+tail -f /var/log/turnserver/turbo.log
 
-# 测试 Turbo API（Turbo 模式）
-curl http://localhost:9999/v1/room/list
+# 检查 Turbo 状态（Turbo 模式）
+curl -s http://localhost:8080/admin/status | python3 -m json.tool
 ```
 
 ---
@@ -513,59 +448,55 @@ cd examples
 
 ### 6.2 Turbo 模式测试
 
-#### 6.2.1 Turbo API 测试
+#### 6.2.1 Admin API 测试
 
 ```bash
-# 列出房间（应返回空列表）
-curl -s http://localhost:9999/v1/room/list | python3 -m json.tool
+# 查看状态
+curl -s http://localhost:8080/admin/status | python3 -m json.tool
 
-# 创建房间
-curl -s -X POST http://localhost:9999/v1/room/create \
-    -H "Content-Type: application/json" \
-    -d '{"room_id":"room123"}' | python3 -m json.tool
+# 查看 Prometheus 指标
+curl -s http://localhost:8080/admin/metrics
 
-# 加入房间
-curl -s -X POST http://localhost:9999/v1/room/join \
-    -H "Content-Type: application/json" \
-    -d '{"room_id":"room123","member_id":"user1","ip":"192.168.1.10","port":50000}' \
-    | python3 -m json.tool
+# 运行时降级到 epoll
+curl -X POST http://localhost:8080/admin/turbo-disable
 
-# 查询房间信息
-curl -s "http://localhost:9999/v1/room/info?room_id=room123" | python3 -m json.tool
-
-# 离开房间
-curl -s -X POST http://localhost:9999/v1/room/leave \
-    -H "Content-Type: application/json" \
-    -d '{"room_id":"room123","member_id":"user1"}' | python3 -m json.tool
+# 排空模式
+curl -X POST http://localhost:8080/admin/drain
+curl -s http://localhost:8080/admin/drain/status | python3 -m json.tool
 ```
 
-#### 6.2.2 性能测试
+#### 6.2.2 WebRTC 自动化测试
+
+项目提供 `test_mode.sh` 和 `test_all_modes.sh` 脚本，可自动完成编译、安装、启动验证和 WebRTC 连通性测试。
+
+```bash
+# 一键测试全部四种模式
+./test_all_modes.sh
+
+# 单模式测试
+./test_mode.sh 1            # 标准模式
+./test_mode.sh 2            # Turbo + io_uring
+./test_mode.sh 3            # Turbo + AF_XDP
+./test_mode.sh 4            # Turbo + 房间广播
+
+# 仅编译安装，跳过 WebRTC 测试
+./test_mode.sh 2 --no-test
+
+# 仅启动服务器验证
+./test_mode.sh 2 --run-only
+```
+
+测试使用 Playwright 启动两个 Chromium 浏览器，通过 TURN 服务器建立 WebRTC 连接，验证 ICE 连通性。测试脚本位于 `.claude/skills/webrtc-coturn-test-skill/regular-diagnostic.js`。
+
+#### 6.2.3 性能测试
 
 ```bash
 # 监控 CPU 和内存
 cd examples
 ./cpu-mem.sh
 
-# 在另一个终端启动服务器并运行压力测试
 # 使用 turnutils_uclient 进行并发连接测试
-bin/turnutils_uclient -n 100 -u claude -w password -T 10 127.0.0.1
-```
-
-#### 6.2.3 负载测试
-
-```bash
-# 终端 1: 启动 Turbo 服务器
-sudo turnserver -c /etc/turnserver/turnserver.conf --turbo -o -v
-
-# 终端 2: 创建房间并加入多个客户端
-for i in $(seq 1 50); do
-    curl -s -X POST http://localhost:9999/v1/room/join \
-        -H "Content-Type: application/json" \
-        -d "{\"room_id\":\"perf_test\",\"member_id\":\"user${i}\",\"ip\":\"10.0.0.${i}\",\"port\":$((50000+i))}"
-done
-
-# 查看房间状态
-curl -s "http://localhost:9999/v1/room/info?room_id=perf_test" | python3 -m json.tool
+bin/turnutils_uclient -n 100 -u test -w test123 -T 10 127.0.0.1
 ```
 
 ---
@@ -578,55 +509,48 @@ curl -s "http://localhost:9999/v1/room/info?room_id=perf_test" | python3 -m json
 |------|----------|
 | 端口被占用 | `ss -ulnp \| grep 3478`，关闭占用进程 |
 | 认证失败 | 检查 `user=` 配置格式为 `username:password` |
-| 日志无法写入 | 检查 `/var/log/turnserver/` 目录权限 |
+| 日志无法写入 | 检查日志目录权限 |
 
-### 7.2 DPDK 模式
-
-| 问题 | 解决方案 |
-|------|----------|
-| `Failed to initialize turbo network interface` | 检查日志前缀的具体错误输出；对于 DPDK：`dpdk-devbind.py --status` 确认网卡绑定到 vfio-pci |
-| 大页内存不足 | `grep Huge /proc/meminfo`，增加 nr_hugepages |
-| EAL 初始化失败 | 确保以 root 运行，检查 IOMMU 是否在 BIOS 中启用 |
-| 启动崩溃（`turbo=true`） | 确认编译时使用了 `--turbo --use-dpdk`；通过 `ldd bin/turnserver \| grep dpdk` 验证 |
-
-### 7.3 AF_XDP 模式
+### 7.2 Turbo + io_uring 模式
 
 | 问题 | 解决方案 |
 |------|----------|
-| `Failed to initialize turbo network interface` + `interface 'xxx' not found` | 确认网卡名称正确：`ip link show` |
-| `Failed to initialize turbo network interface` + `xsk_umem__create failed` | 内存不足或权限不够，确保 root 运行 |
-| `Failed to initialize turbo network interface` + `xsk_socket__create_shared failed` | 网卡不支持 XDP，检查驱动：`ethtool -k <网卡> \| grep xdp`；某些虚拟化网卡（如 virtio）不支持原生 XDP，使用 `--turbo-afxdp-mode=skb` 强制 SKB 模式 |
-| `xdp program not found` | XDP BPF 程序未编译。确保 clang 已安装，重新运行 `make`；或手动编译：`clang -O2 -target bpf -c src/turbo/network/xdp_prog.c -o xdp_prog.o`，将结果放到 `/usr/share/turnserver/xdp_prog.o` |
+| `io_uring_queue_init` 失败 | 检查内核版本 ≥5.6；检查 liburing 是否安装 |
+| 启动崩溃（`--turbo`） | 确认编译时使用了 `--turbo`；通过 `ldd turnserver \| grep uring` 验证 |
+
+### 7.3 Turbo + AF_XDP 模式
+
+| 问题 | 解决方案 |
+|------|----------|
+| `interface 'xxx' not found` | 确认网卡名称正确：`ip link show` |
+| `xsk_umem__create failed` | 内存不足或权限不够，确保 root 运行 |
+| `xsk_socket__create_shared failed` | 网卡不支持 XDP，检查驱动：`ethtool -k <网卡> \| grep xdp`；某些虚拟化网卡（如 virtio）不支持原生 XDP，使用 `--turbo-afxdp-mode=skb` 强制 SKB 模式 |
+| `xdp program not found` | XDP BPF 程序未编译。确保 clang 已安装，重新运行 `make`；或手动编译：`clang -O2 -target bpf -c src/turbo/netif/xdp_prog.c -o xdp_prog.o`，将结果放到 `/usr/local/share/turnserver/xdp_prog.o` |
 | XDP 程序加载失败 | 安装 libbpf-dev、libxdp-dev；确认内核 ≥5.4 |
-| 启动崩溃（`turbo=true`） | 确认编译时使用了 `--turbo --use-afxdp`；通过 `ldd bin/turnserver \| grep xdp` 验证 |
-| SSH 或其他服务断连 | 此问题在新代码中已修复（自动加载 XDP 过滤程序）。如仍发生，确认 `xdp_prog.o` 已正确安装到 `/usr/share/turnserver/` 目录 |
+| SSH 或其他服务断连 | 此问题在新代码中已修复（自动加载 XDP 过滤程序）。如仍发生，确认 `xdp_prog.o` 已正确安装到 `/usr/local/share/turnserver/` 目录 |
 
 **AF_XDP 详细排查步骤**：
 
 ```bash
 # 1. 确认网卡存在且有 IP
-ip addr show enp2s0
+ip addr show eth0
 
 # 2. 检查驱动是否支持 XDP
-ethtool -k enp2s0 | grep -i xdp
+ethtool -k eth0 | grep -i xdp
 
-# 3. 检查 XDP 模式支持情况
-#    如果 ethtool 显示 "off [fixed]"，说明是虚拟化网卡，不支持原生 XDP
-#    使用 auto 模式会自动降级到 SKB，或手动指定 --turbo-afxdp-mode=skb
-
-# 4. 确认 XDP 程序是否加载
-ip link show enp2s0
+# 3. 确认 XDP 程序是否加载
+ip link show eth0
 # 应显示 "prog/xdp" 字样，表示 XDP 程序已附加
 
-# 5. 手动测试 AF_XDP socket 创建
-sudo ip link set dev enp2s0 xdp off  # 先清理残留
+# 4. 手动测试 AF_XDP socket 创建
+sudo ip link set dev eth0 xdp off  # 先清理残留
 sudo turnserver -c /etc/turnserver/turnserver.conf --turbo -V 2>&1 | grep af_xdp
 
-# 6. 如果仍失败，检查内核日志
+# 5. 如果仍失败，检查内核日志
 dmesg | tail -20
 
 # 6. 确认 libbpf/libxdp 链接正确
-ldd bin/turnserver | grep -E "bpf|xdp"
+ldd turnserver | grep -E "bpf|xdp"
 ```
 
 ### 7.4 通用排查
@@ -639,7 +563,7 @@ turnserver -c /etc/turnserver/turnserver.conf --turbo -V
 turnserver -c /etc/turnserver/turnserver.conf --turbo -v 2>&1 | grep -i turbo
 
 # 检查动态库依赖
-ldd bin/turnserver | grep -E "dpdk|bpf|xdp"
+ldd turnserver | grep -E "uring|bpf|xdp"
 ```
 
 ---
@@ -650,33 +574,32 @@ ldd bin/turnserver | grep -E "dpdk|bpf|xdp"
 
 | 参数 | 类型 | 默认值 | 命令行 | 配置文件 | 说明 |
 |------|------|--------|--------|----------|------|
-| `turbo` | bool | false | `--turbo` | `turbo=true` | 启用 Turbo 模式。仅在编译时使用 `--turbo --use-dpdk` 或 `--turbo --use-afxdp` 时可设为 true |
-| `turbo-api-port` | uint16 | 0（禁用） | `--turbo-api-port <port>` | `turbo-api-port=<port>` | Turbo HTTP API 端口，提供房间管理 REST 接口 |
-| `turbo-afxdp-mode` | string | "auto" | `--turbo-afxdp-mode <mode>` | `turbo-afxdp-mode=<mode>` | AF_XDP 模式选择：auto（自动）、drv（原生零拷贝）、skb（内核回退）。仅 AF_XDP 后端有效 |
-| `listening-device` | string | "" | `-d <device>` | `listening-device=<name>` | Turbo 模式下指定网卡：DPDK 用端口 ID/PCI 地址，AF_XDP 用接口名 |
+| `turbo` | bool | false | `--turbo` | `turbo` | 启用 Turbo 模式。仅在编译时使用 `--turbo` 时可设 |
+| `turbo-backend` | string | "io_uring" | `--turbo-backend=` | `turbo-backend=io_uring` | 网络后端：io_uring（默认）或 af_xdp |
+| `turbo-api-port` | uint16 | 0（禁用） | `--turbo-api-port <port>` | `turbo-api-port=<port>` | Turbo HTTP API 端口，提供管理接口 |
+| `turbo-l1-warmup` | bool | enable | — | `turbo-l1-warmup enable` | 预热 L1 缓存 |
+| `turbo-afxdp-mode` | string | "auto" | `--turbo-afxdp-mode <mode>` | `turbo-afxdp-mode=<mode>` | AF_XDP 模式：auto/drv/skb |
+| `turbo-xdp-iface` | string | "" | — | `turbo-xdp-iface=<name>` | AF_XDP 绑定的网卡接口 |
+| `turbo-rooms` | bool | false | `--turbo-rooms` | `turbo-rooms` | 启用房间广播 |
+| `turbo-room-id-provider` | string | "static" | — | `turbo-room-id-provider=...` | Provider 类型：static/token_hmac/lua_script |
 
-### 8.2 三种模式对比
+### 8.2 四种模式对比
 
-| 特性 | 标准模式 | DPDK Turbo | AF_XDP Turbo |
-|------|----------|------------|--------------|
-| 编译标志 | 无 | `--turbo --use-dpdk` → `-DTURN_TURBO -DTURN_USE_DPDK` | `--turbo --use-afxdp` → `-DTURN_TURBO -DTURN_USE_AFXDP` |
-| 网络后端 | 内核协议栈 | DPDK 用户态 | AF_XDP 内核旁路 |
-| 端口模型 | 每会话分配端口 | 单端口复用 (3478) | 单端口复用 (3478) |
-| SFU 广播 | 不支持 | 支持 | 支持 |
-| 房间管理 | 不支持 | 支持 | 支持 |
-| HTTP API | 管理控制台 | +房间管理 REST API | +房间管理 REST API |
-| 并发能力 | ~500-2000 流 | ~10,000+ 流 | ~5,000 流 |
-| P99 延迟 | ~200µs | ~30µs | ~60µs |
-| 网卡独占 | 否 | 是（绑定到 vfio-pci） | 否（与内核共享） |
-| XDP 模式 | N/A | N/A | auto/drv/skb（可配置） |
-| 流量过滤 | N/A | DPDK BPF/ACL | XDP BPF 程序（仅 redirect TURN 流量） |
-| 部署复杂度 | 低 | 高 | 中 |
+| 特性 | 标准模式 | Turbo + io_uring | Turbo + AF_XDP | Turbo + 房间 |
+|------|----------|-----------------|---------------|-------------|
+| 编译标志 | 无 | `--turbo` | `--turbo --turbo-backend=af_xdp` | `--turbo --turbo-rooms` |
+| 网络后端 | epoll (libevent) | io_uring | AF_XDP | io_uring |
+| 端口模型 | 每会话分配端口 | 单端口复用 (3478) | 单端口复用 (3478) | 单端口复用 (3478) |
+| SFU 广播 | 不支持 | 不支持 | 不支持 | 支持 |
+| HTTP API | 无 | /admin/* | /admin/* | /admin/* |
+| 内核要求 | 任意 | ≥5.6 | ≥5.4 | ≥5.6 |
+| 部署复杂度 | 低 | 低 | 中 | 低 |
 
 ### 8.3 配置文件位置
 
 | 文件 | 说明 |
 |------|------|
-| `examples/etc/turnserver.conf` | 完整参考配置，包含所有 coturn 原生选项 + Turbo 选项（文档末尾） |
+| `examples/etc/turnserver.conf` | 完整参考配置，包含所有 coturn 原生选项 |
 | `conf/turbo.conf.example` | Turbo 模式最小配置示例，可直接使用 |
 
 ---
@@ -691,46 +614,65 @@ sudo cp examples/etc/turnserver.conf /etc/turnserver/turnserver.conf
 sudo turnserver -c /etc/turnserver/turnserver.conf -o
 ```
 
-### DPDK 模式一键启动
+### Turbo + io_uring 一键启动
 
 ```bash
-# 0. 检查 DPDK 安装
-pkg-config --modversion libdpdk || echo "请先安装 DPDK（参见 2.2.1）"
-
-# 1. 安装 DPDK
-apt-get install -y meson ninja-build libnuma-dev
-# (下载编译 DPDK 26.03+，参见 2.2.1)
+# 1. 安装依赖
+apt-get install -y liburing-dev
 
 # 2. 编译
-./configure --turbo --use-dpdk
+./configure --turbo
 make -j$(nproc) && sudo make install
 
-# 3. 配置
-echo 1024 | sudo tee /sys/kernel/mm/hugepages/hugepages-2048kB/nr_hugepages
-sudo modprobe vfio-pci
-sudo dpdk-devbind.py -b vfio-pci 0000:02:00.0
+# 3. 启动
+sudo turnserver -c /etc/turnserver/turnserver.conf --turbo --turbo-api-port 8080 -o -v
 
-# 4. 启动
-sudo turnserver -c /etc/turnserver/turnserver.conf --turbo --turbo-api-port 9999 -o -v
+# 4. 验证
+curl -s http://localhost:8080/admin/status | python3 -m json.tool
 ```
 
-### AF_XDP 模式一键启动
+### Turbo + AF_XDP 一键启动
 
 ```bash
 # 1. 安装依赖（clang 用于编译 XDP BPF 程序）
 apt-get install -y clang llvm libbpf-dev libxdp-dev libjson-c-dev
 
 # 2. 编译（会自动编译 xdp_prog.o）
-./configure --turbo --use-afxdp
+./configure --turbo --turbo-backend=af_xdp
 make -j$(nproc) && sudo make install
 
 # 3. 启动（auto 模式：自动选择 DRV 或降级 SKB，XDP 过滤程序自动加载）
-sudo turnserver -c /etc/turnserver/turnserver.conf --turbo --turbo-api-port 9999 -o -v
+sudo turnserver -c /etc/turnserver/turnserver.conf --turbo --turbo-api-port 8080 -o -v
 
 # 4. 验证：检查 XDP 程序是否已加载
 ip link show eth0
 # 应显示 "prog/xdp" 字样
+```
 
-# 5. 验证：其他服务应仍然可达
-ssh localhost  # SSH 不应被影响
+### Turbo + 房间广播一键启动
+
+```bash
+# 1. 编译
+./configure --turbo --turbo-rooms
+make -j$(nproc) && sudo make install
+
+# 2. 配置（turnserver.conf 中新增）
+# turbo-rooms
+# turbo-room-id-provider token_hmac
+# turbo-room-token-secret your_shared_secret
+
+# 3. 启动
+sudo turnserver -c /etc/turnserver/turnserver.conf --turbo -o -v
+```
+
+### 自动化测试
+
+```bash
+# 一键测试全部四种模式
+./test_all_modes.sh
+
+# 单模式测试（支持 1|standard, 2|iouring, 3|afxdp, 4|rooms）
+./test_mode.sh 2            # Turbo + io_uring
+./test_mode.sh 2 --no-test  # 仅编译安装
+./test_mode.sh 2 --run-only # 仅启动验证
 ```
