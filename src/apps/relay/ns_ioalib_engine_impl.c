@@ -1143,6 +1143,14 @@ int create_relay_ioa_sockets(ioa_engine_handle e, ioa_socket_handle client_s, in
           const ioa_addr *_rtp_bind = &local_addr;
 #endif
           if (bind_ioa_socket(*rtp_s, _rtp_bind, (transport == STUN_ATTRIBUTE_TRANSPORT_TCP_VALUE)) >= 0) {
+#if defined(TURBO_FEATURES)
+            /* bind_ioa_socket stores _rtp_bind (INADDR_ANY:port) in s->local_addr,
+             * but the port pool is keyed by the relay IP.  Restore the relay
+             * address so that close_ioa_socket → turnipports_release can find
+             * and release the port correctly, preventing a port leak. */
+            if (turbo_bind_any)
+              addr_cpy(&((*rtp_s)->local_addr), &local_addr);
+#endif
             break;
           } else {
             IOA_CLOSE_SOCKET(*rtp_s);

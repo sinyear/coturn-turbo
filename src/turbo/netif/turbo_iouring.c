@@ -100,14 +100,18 @@ static void iouring_close(struct turbo_netif *tif) {
     struct iouring_priv *priv = tif->priv;
     if (!priv) return;
 
-    /* Drain any remaining CQEs to avoid leaking packet allocations */
+    /* Drain all remaining CQEs to avoid leaking packet allocations.
+     * Count entries so we advance the ring by the actual number consumed,
+     * not by inflight_rx (which can be negative due to send CQEs). */
     struct io_uring_cqe *cqe;
     unsigned head;
+    int drained = 0;
     io_uring_for_each_cqe(&priv->ring, head, cqe) {
         struct rtp_packet *p = io_uring_cqe_get_data(cqe);
         if (p) iouring_free_pkt(tif, p);
+        drained++;
     }
-    io_uring_cq_advance(&priv->ring, priv->inflight_rx);
+    io_uring_cq_advance(&priv->ring, drained);
 
     io_uring_queue_exit(&priv->ring);
     free(priv);
@@ -147,33 +151,50 @@ static int iouring_recv_pkts(struct turbo_netif *tif,
     struct io_uring_cqe *cqe;
     unsigned head;
     int n = 0;
+    int total_consumed = 0;  /* ALL CQEs iterated — advance ring by this */
+    int recv_consumed  = 0;  /* recv CQEs only — controls SQE resubmit count */
 
     io_uring_for_each_cqe(&priv->ring, head, cqe) {
         if (n >= max) break;
+        total_consumed++;
+
         struct rtp_packet *p = io_uring_cqe_get_data(cqe);
-        if (cqe->res > 0 && p) {
+        if (p == NULL) {
+            /* Send completion (user_data=NULL, fire-and-forget).
+             * io_uring still generates a CQE; consume it silently.
+             * Do NOT decrement inflight_rx — sends were never counted there. */
+            continue;
+        }
+
+        /* Recv completion: count it and update inflight_rx either way */
+        recv_consumed++;
+        priv->inflight_rx--;
+
+        if (cqe->res > 0) {
             p->len = (uint16_t)cqe->res;
             pkts[n++] = p;
-        } else if (p) {
-            iouring_free_pkt(tif, p);  /* error or zero-length */
+        } else {
+            /* Error or zero-length: free packet but still advance the CQE.
+             * NOT advancing was the original bug that caused double-free. */
+            iouring_free_pkt(tif, p);
         }
-        priv->inflight_rx--;
     }
-    io_uring_cq_advance(&priv->ring, n + (priv->inflight_rx < 0 ? 0 : 0));
-    /* Correct advance: we iterated n+error entries above */
-    /* Simplification: advance by the CQEs we consumed */
-    /* (io_uring_for_each_cqe does not advance the ring; do it now) */
+    /* Advance by ALL iterated entries (recv success + recv error + send).
+     * Advancing only by n (previous code) left error/send CQEs stranded,
+     * causing double-free when they were re-seen on the next call. */
+    io_uring_cq_advance(&priv->ring, total_consumed);
 
     if (n > 0) tif->rx_packets += n;
 
-    /* Resubmit recv SQEs to replace consumed slots */
+    /* Resubmit recv SQEs for every consumed recv slot (success + error)
+     * so that inflight_rx and the SQ depth stay stable. */
     if (!priv->suspended) {
-        for (int i = 0; i < n; i++) {
+        for (int i = 0; i < recv_consumed; i++) {
             struct rtp_packet *p = iouring_alloc_pkt(tif);
             if (!p) break;
             submit_recv_sqe(priv, p);
         }
-        if (n > 0) io_uring_submit(&priv->ring);
+        if (recv_consumed > 0) io_uring_submit(&priv->ring);
     }
 
     return n;
