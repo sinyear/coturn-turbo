@@ -83,6 +83,15 @@ static int iouring_init(struct turbo_netif *tif, void *cfg) {
         free(priv); return -1;
     }
 
+    /* Validate ring_fd — io_uring can succeed init but return an invalid fd
+     * in container environments, causing segfaults later in submit_and_wait. */
+    if (priv->ring.ring_fd < 0) {
+        io_uring_queue_exit(&priv->ring);
+        free(priv);
+        tif->priv = NULL;
+        return -1;
+    }
+
     tif->priv = priv;
 
     /* Pre-fill SQ with RECV SQEs */

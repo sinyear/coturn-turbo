@@ -123,7 +123,8 @@ int turbo_room_add_member(const char *room_id,
             pthread_rwlock_unlock(&g_rooms_lock);
             return -3;
         }
-        strncpy(room->room_id, room_id, 63);
+        strncpy(room->room_id, room_id, sizeof(room->room_id) - 1);
+        room->room_id[sizeof(room->room_id) - 1] = '\0';
         pthread_rwlock_init(&room->lock, NULL);
 
         uint32_t b = room_bucket(room_id);
@@ -156,7 +157,8 @@ int turbo_room_add_member(const char *room_id,
         pthread_rwlock_unlock(&g_rooms_lock);
         return -3;
     }
-    strncpy(nm->member_id, member_id, 63);
+    strncpy(nm->member_id, member_id, sizeof(nm->member_id) - 1);
+    nm->member_id[sizeof(nm->member_id) - 1] = '\0';
     nm->alloc_id = alloc_id;
     nm->peer_addr = *peer_addr;
     nm->next = room->members;
@@ -246,7 +248,7 @@ int turbo_room_broadcast(struct turbo_netif *netif,
                           const char *room_id,
                           uint32_t sender_alloc_id,
                           struct rtp_packet *pkt) {
-    if (!netif || !room_id || !pkt) return 0;
+    if (!netif || !room_id || !room_id[0] || !pkt) return 0;
 
     /* Build a destination list under shared lock to minimise critical section */
 #define MAX_BROADCAST_DSTS 64
@@ -270,7 +272,10 @@ int turbo_room_broadcast(struct turbo_netif *netif,
 
     pthread_rwlock_unlock(&g_rooms_lock);
 
-    /* Send outside the lock */
+    if (ndsts == 0)
+        return 0;
+
+    /* Send outside the lock — dsts are local copies, safe even if room is destroyed */
     struct rtp_packet *tx[MAX_BROADCAST_DSTS];
     int n = turbo_switch_broadcast(netif, pkt, dsts, ndsts, tx, MAX_BROADCAST_DSTS);
     for (int i = 0; i < n; i++) {

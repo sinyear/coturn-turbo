@@ -251,7 +251,10 @@ void turbo_fastpath_warmup(struct turbo_fastpath *fp,
     e->snap.alloc_id = alloc_id;
     if (client_addr) e->snap.client_addr = *client_addr;
     if (peer_addr)   e->snap.peer_addr   = *peer_addr;
-    if (room_id)     strncpy(e->snap.room_id, room_id, 63);
+    if (room_id) {
+        strncpy(e->snap.room_id, room_id, sizeof(e->snap.room_id) - 1);
+        e->snap.room_id[sizeof(e->snap.room_id) - 1] = '\0';
+    }
     e->snap.expiry  = expiry;
     e->used         = 1;
     turbo_seqlock_write_end(&e->seqlock);
@@ -304,6 +307,10 @@ void turbo_fastpath_remove(struct turbo_fastpath *fp, uint32_t alloc_id) {
     e->used = 0;
     memset(&e->snap, 0, sizeof(e->snap));
     turbo_seqlock_write_end(&e->seqlock);
+
+    /* Compiler barrier: ensure all writes above are visible before
+     * invalidating hash table entries that readers may traverse. */
+    __sync_synchronize();
 
     /* Invalidate L1 entries pointing to this alloc_id */
     for (int i = 0; i < TURBO_L1_CACHE_SIZE; i++) {

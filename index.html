@@ -1,12 +1,774 @@
 <!DOCTYPE html>
-<html lang='en'>
+<html lang="zh-CN">
 <head>
-    <meta charset='utf-8'>
-    <meta name='viewport' content='width=device-width, initial-scale=1'>
-    <title>Page Title</title>
-    <link rel='stylesheet' href='main.css'>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>coturn-turbo 音视频通讯测试</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+        }
+        body {
+            margin: 20px;
+            background: #f5f7fb;
+        }
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+        h1 {
+            color: #1a2b4c;
+            margin-bottom: 10px;
+        }
+        .subtitle {
+            color: #5e6f8d;
+            margin-top: 0;
+            margin-bottom: 20px;
+        }
+        .config-panel {
+            background: white;
+            border-radius: 12px;
+            padding: 20px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+            border: 1px solid #e9ecf2;
+        }
+        .config-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 15px;
+            align-items: flex-end;
+        }
+        .config-item {
+            display: flex;
+            flex-direction: column;
+            min-width: 200px;
+        }
+        .config-item label {
+            font-size: 13px;
+            font-weight: 600;
+            color: #3a4a6b;
+            margin-bottom: 5px;
+        }
+        .config-item input, .config-item select, .config-item textarea {
+            padding: 8px 12px;
+            border: 1px solid #d0d7e5;
+            border-radius: 6px;
+            font-size: 14px;
+        }
+        .config-item input:focus, .config-item select:focus, .config-item textarea:focus {
+            outline: 2px solid #2d7aff;
+            border-color: transparent;
+        }
+        .button-group {
+            display: flex;
+            gap: 10px;
+            margin-top: 20px;
+            flex-wrap: wrap;
+        }
+        .btn {
+            padding: 8px 18px;
+            border-radius: 6px;
+            border: none;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s;
+            font-size: 14px;
+        }
+        .btn-primary {
+            background: #2d7aff;
+            color: white;
+        }
+        .btn-primary:hover {
+            background: #1a5fd9;
+        }
+        .btn-success {
+            background: #10b981;
+            color: white;
+        }
+        .btn-success:hover {
+            background: #059669;
+        }
+        .btn-danger {
+            background: #ef4444;
+            color: white;
+        }
+        .btn-danger:hover {
+            background: #dc2626;
+        }
+        .btn-secondary {
+            background: #eef2f6;
+            color: #3a4a6b;
+        }
+        .btn-secondary:hover {
+            background: #dfe5ee;
+        }
+        .video-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+            gap: 20px;
+            margin-bottom: 20px;
+        }
+        .video-card {
+            background: white;
+            border-radius: 12px;
+            padding: 15px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+            border: 1px solid #e9ecf2;
+        }
+        .video-card h3 {
+            margin-top: 0;
+            margin-bottom: 12px;
+            color: #1a2b4c;
+            font-size: 16px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        video {
+            width: 100%;
+            background: #1e1e2f;
+            border-radius: 8px;
+            aspect-ratio: 16/9;
+            object-fit: cover;
+        }
+        .stats-panel {
+            background: white;
+            border-radius: 12px;
+            padding: 20px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+            border: 1px solid #e9ecf2;
+            margin-bottom: 20px;
+        }
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 15px;
+        }
+        .stat-card {
+            background: #f8fafc;
+            padding: 12px;
+            border-radius: 8px;
+        }
+        .stat-label {
+            font-size: 13px;
+            color: #5e6f8d;
+            margin-bottom: 5px;
+        }
+        .stat-value {
+            font-size: 22px;
+            font-weight: 600;
+            color: #1a2b4c;
+        }
+        .log-container {
+            background: #1e1e2f;
+            color: #e0e0ff;
+            border-radius: 8px;
+            padding: 15px;
+            max-height: 250px;
+            overflow-y: auto;
+            font-family: 'SF Mono', 'Menlo', 'Monaco', 'Cascadia Code', monospace;
+            font-size: 13px;
+            line-height: 1.5;
+        }
+        .log-entry {
+            border-bottom: 1px solid #2d2d4a;
+            padding: 5px 0;
+        }
+        .log-time {
+            color: #7aa2f7;
+            margin-right: 10px;
+        }
+        .log-info {
+            color: #9ece6a;
+        }
+        .log-warn {
+            color: #e0af68;
+        }
+        .log-error {
+            color: #f7768e;
+        }
+        .badge {
+            background: #eef2f6;
+            padding: 2px 8px;
+            border-radius: 20px;
+            font-size: 12px;
+            color: #3a4a6b;
+        }
+        .control-bar {
+            display: flex;
+            gap: 10px;
+            margin-top: 12px;
+        }
+        .room-info {
+            font-size: 14px;
+            color: #2d7aff;
+            font-weight: 500;
+        }
+        .sdp-panel {
+            background: white;
+            border-radius: 12px;
+            padding: 20px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+            border: 1px solid #e9ecf2;
+        }
+        .sdp-textarea {
+            width: 100%;
+            min-height: 150px;
+            font-family: monospace;
+            resize: vertical;
+        }
+        .copy-btn {
+            margin-top: 10px;
+            padding: 6px 12px;
+            font-size: 12px;
+        }
+    </style>
 </head>
 <body>
-    
+<div class="container">
+    <h1>🎥 coturn-turbo 音视频通讯测试</h1>
+    <p class="subtitle">WebRTC 标准 API · TURN/SFU 验证 · 实时日志</p>
+
+    <div class="config-panel">
+        <div class="config-row">
+            <div class="config-item">
+                <label>TURN 服务器 URL</label>
+                <input type="text" id="turnUrl" value="turn:122.51.14.87:3478" placeholder="turn:ip:port">
+            </div>
+            <div class="config-item">
+                <label>用户名 (username)</label>
+                <input type="text" id="turnUsername" value="test" placeholder="username">
+            </div>
+            <div class="config-item">
+                <label>密码 (credential)</label>
+                <input type="text" id="turnCredential" value="test123" placeholder="password">
+            </div>
+            <div class="config-item">
+                <label>房间号</label>
+                <input type="text" id="roomId" value="123" placeholder="room identifier">
+            </div>
+        </div>
+        <div class="button-group">
+            <button class="btn btn-primary" id="btnGather">🧊 采集 ICE 候选</button>
+            <button class="btn btn-success" id="btnCreateOffer">📤 创建 Offer</button>
+            <button class="btn btn-success" id="btnJoinRoom">🚪 加入房间</button>
+            <button class="btn btn-danger" id="btnLeaveRoom">⏹️ 离开房间</button>
+            <button class="btn btn-secondary" id="btnToggleAudio">🎤 静音</button>
+            <button class="btn btn-secondary" id="btnToggleVideo">📹 关闭摄像头</button>
+            <button class="btn btn-secondary" id="btnClearLog">🧹 清空日志</button>
+        </div>
+    </div>
+
+    <div class="sdp-panel">
+        <h3>📋 SDP 交换区域</h3>
+        <div class="config-row">
+            <div class="config-item" style="flex: 1;">
+                <label>本地 SDP (Offer/Answer)</label>
+                <textarea id="localSdp" class="sdp-textarea" readonly placeholder="本地生成的SDP会显示在这里..."></textarea>
+                <button class="btn btn-secondary copy-btn" id="btnCopyLocalSdp">复制本地SDP</button>
+            </div>
+            <div class="config-item" style="flex: 1;">
+                <label>远程 SDP 类型</label>
+                <select id="remoteSdpType">
+                    <option value="offer">Offer</option>
+                    <option value="answer">Answer</option>
+                </select>
+                <label>远程 SDP (粘贴对方的SDP)</label>
+                <textarea id="remoteSdp" class="sdp-textarea" placeholder="粘贴对方的SDP到这里..."></textarea>
+                <button class="btn btn-primary copy-btn" id="btnSetRemoteSdp">设置远程SDP</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="video-grid">
+        <div class="video-card">
+            <h3>📷 本地视频 <span class="badge" id="localResolution">未开始</span></h3>
+            <video id="localVideo" autoplay muted playsinline></video>
+            <div class="control-bar">
+                <span id="localIceState" class="badge">ICE: 未连接</span>
+                <span id="localConnectionState" class="badge">连接状态: 新建</span>
+            </div>
+        </div>
+        <div class="video-card">
+            <h3>🌐 远程视频 <span class="badge" id="remoteResolution">等待加入</span></h3>
+            <video id="remoteVideo" autoplay playsinline muted></video>
+            <div class="control-bar">
+                <span id="remoteIceState" class="badge">ICE: 未连接</span>
+                <span id="remoteConnectionState" class="badge">连接状态: 新建</span>
+            </div>
+        </div>
+    </div>
+
+    <div class="stats-panel">
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="stat-label">ICE 收集状态</div>
+                <div class="stat-value" id="iceGatheringState">new</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">候选类型</div>
+                <div class="stat-value" id="candidateTypes">-</div>
+            </div>
+            <div class="stat-label">信令状态</div>
+            <div class="stat-value" id="signalingState">stable</div>
+        </div>
+    </div>
+
+    <div class="log-container" id="logContainer">
+        <div class="log-entry"><span class="log-time">[System]</span> <span class="log-info">测试页面已就绪，请配置 TURN 参数。</span></div>
+    </div>
+</div>
+
+<script>
+    (function() {
+        "use strict";
+
+        let localStream = null;
+        let peerConnection = null;
+        let isInRoom = false;
+        let roomId = '';
+        let audioEnabled = true;
+        let videoEnabled = true;
+
+        const localVideo = document.getElementById('localVideo');
+        const remoteVideo = document.getElementById('remoteVideo');
+        const logContainer = document.getElementById('logContainer');
+        const turnUrlInput = document.getElementById('turnUrl');
+        const turnUsernameInput = document.getElementById('turnUsername');
+        const turnCredentialInput = document.getElementById('turnCredential');
+        const roomIdInput = document.getElementById('roomId');
+        const btnGather = document.getElementById('btnGather');
+        const btnCreateOffer = document.getElementById('btnCreateOffer');
+        const btnJoinRoom = document.getElementById('btnJoinRoom');
+        const btnLeaveRoom = document.getElementById('btnLeaveRoom');
+        const btnToggleAudio = document.getElementById('btnToggleAudio');
+        const btnToggleVideo = document.getElementById('btnToggleVideo');
+        const btnClearLog = document.getElementById('btnClearLog');
+        
+        const localSdpTextarea = document.getElementById('localSdp');
+        const remoteSdpTextarea = document.getElementById('remoteSdp');
+        const remoteSdpTypeSelect = document.getElementById('remoteSdpType');
+        const btnCopyLocalSdp = document.getElementById('btnCopyLocalSdp');
+        const btnSetRemoteSdp = document.getElementById('btnSetRemoteSdp');
+
+        const iceGatheringStateSpan = document.getElementById('iceGatheringState');
+        const candidateTypesSpan = document.getElementById('candidateTypes');
+        const signalingStateSpan = document.getElementById('signalingState');
+        const localIceStateSpan = document.getElementById('localIceState');
+        const localConnStateSpan = document.getElementById('localConnectionState');
+        const remoteIceStateSpan = document.getElementById('remoteIceState');
+        const remoteConnStateSpan = document.getElementById('remoteConnectionState');
+        const localResolutionSpan = document.getElementById('localResolution');
+        const remoteResolutionSpan = document.getElementById('remoteResolution');
+
+        function log(level, message) {
+            const entry = document.createElement('div');
+            entry.className = 'log-entry';
+            const time = new Date().toLocaleTimeString();
+            let levelClass = 'log-info';
+            if (level === 'warn') levelClass = 'log-warn';
+            else if (level === 'error') levelClass = 'log-error';
+            entry.innerHTML = `<span class="log-time">[${time}]</span> <span class="${levelClass}">${message}</span>`;
+            logContainer.appendChild(entry);
+            logContainer.scrollTop = logContainer.scrollHeight;
+        }
+
+        function clearLog() {
+            logContainer.innerHTML = '';
+            log('info', '日志已清空');
+        }
+
+        // 在日志中展开显示 SDP（可折叠）
+        function logSDP(label, sdp) {
+            if (!sdp) return;
+            const entry = document.createElement('div');
+            entry.className = 'log-entry';
+            const time = new Date().toLocaleTimeString();
+            const lines = sdp.split('\n');
+            const preview = lines.slice(0, 3).join('\n');
+            const candidateCount = (sdp.match(/a=candidate:/g) || []).length;
+            const iceCandidates = lines.filter(l => l.startsWith('a=candidate:'));
+            entry.innerHTML = `
+                <span class="log-time">[${time}]</span> <span class="log-info">${label}</span><br>
+                <span class="log-info">SDP: ${lines.length} 行, ${candidateCount} 个 ICE 候选</span><br>
+                <span class="log-info" style="color:#7aa2f7;cursor:pointer;user-select:none" onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display==='none'?'block':'none';this.textContent=this.textContent==='▼ 展开SDP'?'▲ 收起SDP':'▼ 展开SDP'">▼ 展开SDP</span>
+                <div style="display:none;max-height:200px;overflow-y:auto;background:#12122a;padding:8px;margin-top:4px;border-radius:4px;font-size:11px;white-space:pre-wrap;word-break:break-all;color:#a0a0c0;">${sdp.replace(/</g, '&lt;')}</div>
+                ${iceCandidates.length > 0 ? `<span class="log-info" style="color:#7aa2f7;cursor:pointer;user-select:none;margin-top:4px;display:inline-block" onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display==='none'?'block':'none';this.textContent=this.textContent==='▼ 展开ICE候选'?'▲ 收起ICE候选':'▼ 展开ICE候选'">▼ 展开ICE候选</span>
+                <div style="display:none;max-height:150px;overflow-y:auto;background:#12122a;padding:8px;margin-top:4px;border-radius:4px;font-size:11px;white-space:pre-wrap;word-break:break-all;color:#9ece6a;">${iceCandidates.join('\n').replace(/</g, '&lt;')}</div>` : ''}
+            `;
+            logContainer.appendChild(entry);
+            logContainer.scrollTop = logContainer.scrollHeight;
+        }
+
+        // ==============================================
+        // 🔥 核心修复：自动清理非法 SDP 行
+        // ==============================================
+        // Hex encode/decode to bypass clipboard/textarea encoding issues
+        function sdpToHex(sdp) {
+            let result = '';
+            for (let i = 0; i < sdp.length; i++) {
+                result += sdp.charCodeAt(i).toString(16).padStart(2, '0');
+            }
+            return result;
+        }
+
+        function hexToSdp(hex) {
+            let result = '';
+            hex = hex.replace(/\s+/g, ''); // remove whitespace
+            for (let i = 0; i < hex.length; i += 2) {
+                result += String.fromCharCode(parseInt(hex.substring(i, i + 2), 16));
+            }
+            return result;
+        }
+
+        function cleanSDP(sdp) {
+            if (!sdp) return '';
+            let normalized = sdp.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+            normalized = normalized.replace(/[^\x09\x0A\x20-\x7E]/g, '');
+            const lines = normalized.split('\n');
+            const cleaned = [];
+            for (const line of lines) {
+                const trimmed = line.replace(/[\t ]+/g, ' ').trim();
+                if (trimmed === '') continue;
+                if (trimmed.startsWith('a=max-message-size:')) continue;
+                if (trimmed.startsWith('a=rtcp-rsize')) continue;
+                cleaned.push(trimmed);
+            }
+            return cleaned.join('\n');
+        }
+
+        function getIceServers() {
+            const urls = turnUrlInput.value.trim();
+            const username = turnUsernameInput.value.trim();
+            const credential = turnCredentialInput.value.trim();
+            if (!urls) {
+                log('warn', '未配置 TURN 服务器，将仅使用 STUN');
+                return [{ urls: 'stun:stun.l.google.com:19302' }];
+            }
+            return [{
+                urls: urls,
+                username: username,
+                credential: credential,
+                credentialType: 'password'
+            }];
+        }
+
+        function updateStats() {
+            if (!peerConnection) return;
+            iceGatheringStateSpan.textContent = peerConnection.iceGatheringState;
+            signalingStateSpan.textContent = peerConnection.signalingState;
+            localIceStateSpan.textContent = `ICE: ${peerConnection.iceConnectionState}`;
+            localConnStateSpan.textContent = `连接状态: ${peerConnection.connectionState}`;
+            remoteIceStateSpan.textContent = `ICE: ${peerConnection.iceConnectionState}`;
+            remoteConnStateSpan.textContent = `连接状态: ${peerConnection.connectionState}`;
+        }
+
+        function monitorLocalResolution() {
+            if (localStream) {
+                const videoTrack = localStream.getVideoTracks()[0];
+                if (videoTrack) {
+                    const settings = videoTrack.getSettings();
+                    localResolutionSpan.textContent = `${settings.width || 0}x${settings.height || 0}`;
+                }
+            }
+        }
+
+        function initPeerConnection() {
+            if (peerConnection) {
+                peerConnection.close();
+            }
+            const configuration = { 
+                iceServers: getIceServers(),
+                iceTransportPolicy: 'all'
+            };
+            peerConnection = new RTCPeerConnection(configuration);
+            // 暴露到全局供自动化测试访问
+            window.__peerConnection = peerConnection;
+            log('info', 'PeerConnection 已初始化');
+
+            peerConnection.onicecandidate = (event) => {
+                if (event.candidate) {
+                    const c = event.candidate;
+                    log('info', `发现 ICE 候选: ${c.type} | ${c.protocol} ${c.address}:${c.port}`);
+                } else {
+                    log('info', 'ICE 候选收集完成');
+                }
+            };
+
+            peerConnection.oniceconnectionstatechange = () => {
+                updateStats();
+                log('info', `ICE 状态: ${peerConnection.iceConnectionState}`);
+                if (peerConnection.iceConnectionState === 'connected') {
+                    log('info', '✅ ICE 连接成功！');
+                }
+            };
+
+            peerConnection.onconnectionstatechange = () => {
+                updateStats();
+                log('info', `连接状态: ${peerConnection.connectionState}`);
+                if (peerConnection.connectionState === 'connected') {
+                    log('info', '✅ WebRTC 连接成功！');
+                }
+            };
+
+            peerConnection.ontrack = (event) => {
+                log('info', `收到远程轨道: ${event.track.kind}`);
+                remoteVideo.srcObject = new MediaStream();
+                remoteVideo.srcObject.addTrack(event.track);
+                remoteVideo.muted = true;
+                remoteVideo.play().catch(() => {});
+                log('info', `已添加 ${event.track.kind} 轨道到远程视频`);
+            };
+
+            // 监控远程视频加载
+            remoteVideo.addEventListener('loadeddata', () => {
+                log('info', `✅ 远程视频已加载: ${remoteVideo.videoWidth}x${remoteVideo.videoHeight}`);
+                remoteResolutionSpan.textContent = `${remoteVideo.videoWidth}x${remoteVideo.videoHeight}`;
+            });
+            remoteVideo.addEventListener('error', (e) => {
+                log('error', `远程视频错误: ${e.message || e.type}`);
+            });
+
+            if (localStream) {
+                localStream.getTracks().forEach(track => {
+                    peerConnection.addTrack(track, localStream);
+                });
+            }
+
+            return peerConnection;
+        }
+
+        async function getLocalStream() {
+            if (localStream) return localStream;
+            try {
+                log('info', '请求摄像头+麦克风权限...');
+                localStream = await navigator.mediaDevices.getUserMedia({
+                    video: { width: 1280, height: 720 }, audio: true
+                });
+                localVideo.srcObject = localStream;
+                monitorLocalResolution();
+                log('info', '✅ 已获取本地媒体');
+                return localStream;
+            } catch (e) {
+                log('warn', `无法获取摄像头: ${e.message}，使用虚拟视频流`);
+                // 创建虚拟视频流（纯色画面 + 静音音轨）
+                const canvas = document.createElement('canvas');
+                canvas.width = 1280;
+                canvas.height = 720;
+                const ctx = canvas.getContext('2d');
+                // 绘制彩色画面（避免全黑被当作无效）
+                const colors = ['#FF00FF', '#00FFFF', '#4a90d9', '#FF0000', '#d94a4a', '#00FF00', '#4ad97a', '#0000FF', '#d9d94a', '#FFFF00'];
+                const randColor = colors[Math.floor(Math.random() * colors.length)];
+                ctx.fillStyle = randColor;
+                ctx.fillRect(0, 0, 1280, 720);
+                ctx.fillStyle = '#ffffff';
+                ctx.font = '48px sans-serif';
+                ctx.textAlign = 'center';
+                ctx.fillText('Virtual Video (No Camera)', 640, 360);
+
+                // 让画面动起来（模拟视频变化）
+                const animate = () => {
+                    if (!canvas) return;
+                    const c = colors[Math.floor(Math.random() * colors.length)];
+                    ctx.fillStyle = c;
+                    ctx.fillRect(0, 0, 1280, 720);
+                    ctx.fillStyle = '#ffffff';
+                    ctx.fillText(`Virtual Video - ${new Date().toLocaleTimeString()}`, 640, 360);
+                    requestAnimationFrame(animate);
+                };
+                animate();
+
+                const videoTrack = canvas.captureStream(30).getVideoTracks()[0];
+                // 创建静音音轨（可选）
+                const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                const silentOscillator = audioCtx.createOscillator();
+                const gainNode = audioCtx.createGain();
+                gainNode.gain.value = 0; // 静音
+                silentOscillator.connect(gainNode);
+                const dest = audioCtx.createMediaStreamDestination();
+                gainNode.connect(dest);
+                silentOscillator.start();
+                const audioTrack = dest.stream.getAudioTracks()[0];
+
+                localStream = new MediaStream([videoTrack, audioTrack]);
+                localVideo.srcObject = localStream;
+                localResolutionSpan.textContent = '1280x720 (虚拟)';
+                log('info', '✅ 虚拟媒体流已就绪（适用于远程桌面测试）');
+                return localStream;
+            }
+        }
+
+        async function createOffer() {
+            try {
+                await getLocalStream();
+                initPeerConnection();
+                const offer = await peerConnection.createOffer({
+                    offerToReceiveAudio: true, offerToReceiveVideo: true
+                });
+                await peerConnection.setLocalDescription(offer);
+
+                // 等待 ICE 收集完成，确保 SDP 包含完整候选
+                log('info', '等待 ICE 候选收集...');
+                await new Promise((resolve) => {
+                    const check = () => {
+                        if (peerConnection.iceGatheringState === 'complete') {
+                            peerConnection.removeEventListener('icegatheringstatechange', check);
+                            resolve();
+                        }
+                    };
+                    peerConnection.addEventListener('icegatheringstatechange', check);
+                    // 超时也继续（15秒）
+                    setTimeout(() => {
+                        peerConnection.removeEventListener('icegatheringstatechange', check);
+                        resolve();
+                    }, 15000);
+                });
+
+                // 从 pc.localDescription.sdp 读取（含完整候选）
+                const completeSdp = peerConnection.localDescription.sdp;
+                logSDP('📤 本地 Offer SDP (type=offer)', completeSdp);
+                const offerHex = sdpToHex(completeSdp);
+                localSdpTextarea.value = offerHex;
+                const candidateCount = (completeSdp.match(/a=candidate:/g) || []).length;
+                log('info', `✅ Offer 已创建（${candidateCount} 个 ICE 候选，已转为 Hex）`);
+            } catch (e) {
+                log('error', `创建Offer失败: ${e.message}`);
+            }
+        }
+
+        async function setRemoteSdp() {
+            if (!peerConnection) {
+                log('error', '请先创建Offer或加入房间');
+                return;
+            }
+            const sdpType = remoteSdpTypeSelect.value;
+
+            // 优先使用 textarea 中的 hex，也支持 prompt 粘贴
+            let remoteSdpRaw = remoteSdpTextarea.value.trim();
+
+            // 自动检测 Hex（纯 0-9a-f 且长度 > 200）
+            let sdp;
+            if (/^[0-9a-fA-F]{200,}$/.test(remoteSdpRaw)) {
+                sdp = hexToSdp(remoteSdpRaw);
+                log('info', `检测到 Hex 编码，已还原为 SDP（${sdp.length} 字符）`);
+            } else {
+                sdp = cleanSDP(remoteSdpRaw);
+            }
+
+            try {
+                logSDP(`📥 设置远程 ${sdpType} SDP`, sdp);
+                // 始终使用 JS 解析后的值设置（不用 textarea 的值）
+                await peerConnection.setRemoteDescription({
+                    type: sdpType,
+                    sdp: sdp
+                });
+                log('info', `✅ 远程 ${sdpType} 设置成功`);
+
+                if (sdpType === 'offer') {
+                    const answer = await peerConnection.createAnswer();
+                    await peerConnection.setLocalDescription(answer);
+
+                    // 等待 ICE 收集完成
+                    log('info', '等待 ICE 候选收集...');
+                    await new Promise((resolve) => {
+                        const check = () => {
+                            if (peerConnection.iceGatheringState === 'complete') {
+                                peerConnection.removeEventListener('icegatheringstatechange', check);
+                                resolve();
+                            }
+                        };
+                        peerConnection.addEventListener('icegatheringstatechange', check);
+                        setTimeout(() => {
+                            peerConnection.removeEventListener('icegatheringstatechange', check);
+                            resolve();
+                        }, 15000);
+                    });
+
+                    const completeSdp = peerConnection.localDescription.sdp;
+                    logSDP('📤 本地 Answer SDP (type=answer)', completeSdp);
+                    const answerHex = sdpToHex(completeSdp);
+                    localSdpTextarea.value = answerHex;
+                    const candidateCount = (completeSdp.match(/a=candidate:/g) || []).length;
+                    log('info', `✅ Answer 已生成（${candidateCount} 个 ICE 候选，已转为 Hex）`);
+                }
+            } catch (e) {
+                log('error', `SDP 错误: ${e.message}`);
+            }
+        }
+
+        function copyLocalSdp() {
+            const sdp = localSdpTextarea.value.trim();
+            if (!sdp) { log('warn', '无SDP可复制'); return; }
+            // 将 SDP 转为 Hex 编码，避免剪贴板/textarea 编码问题
+            const hex = sdpToHex(sdp);
+            navigator.clipboard.writeText(hex).then(() => {
+                log('info', `✅ 已复制 Hex 编码 SDP（${hex.length} 字符）`);
+                // 同时更新 textarea 显示 Hex，方便手动复制
+                localSdpTextarea.value = hex;
+            });
+        }
+
+        async function joinRoom() {
+            const newRoomId = roomIdInput.value.trim();
+            if (!newRoomId) { log('error', '输入房间号'); return; }
+            await getLocalStream();
+            initPeerConnection();
+            roomId = newRoomId;
+            isInRoom = true;
+            log('info', `✅ 已加入房间 ${roomId}`);
+        }
+
+        function leaveRoom() {
+            if (peerConnection) peerConnection.close();
+            if (localStream) localStream.getTracks().forEach(t => t.stop());
+            localVideo.srcObject = null;
+            remoteVideo.srcObject = null;
+            localSdpTextarea.value = '';
+            remoteSdpTextarea.value = '';
+            peerConnection = null;
+            localStream = null;
+            log('info', '🔌 已离开房间');
+        }
+
+        function toggleAudio() {
+            if (!localStream) return;
+            const track = localStream.getAudioTracks()[0];
+            track.enabled = !track.enabled;
+            btnToggleAudio.textContent = track.enabled ? '🎤 静音' : '🎤 取消静音';
+        }
+        function toggleVideo() {
+            if (!localStream) return;
+            const track = localStream.getVideoTracks()[0];
+            track.enabled = !track.enabled;
+            btnToggleVideo.textContent = track.enabled ? '📹 关闭摄像头' : '📹 打开摄像头';
+        }
+
+        function bindEvents() {
+            btnGather.addEventListener('click', initPeerConnection);
+            btnCreateOffer.addEventListener('click', createOffer);
+            btnJoinRoom.addEventListener('click', joinRoom);
+            btnLeaveRoom.addEventListener('click', leaveRoom);
+            btnToggleAudio.addEventListener('click', toggleAudio);
+            btnToggleVideo.addEventListener('click', toggleVideo);
+            btnClearLog.addEventListener('click', clearLog);
+            btnCopyLocalSdp.addEventListener('click', copyLocalSdp);
+            btnSetRemoteSdp.addEventListener('click', setRemoteSdp);
+
+            setInterval(() => {
+                updateStats();
+                monitorLocalResolution();
+            }, 1000);
+        }
+
+        async function init() {
+            log('info', '页面已启动（已内置SDP自动修复）');
+            bindEvents();
+        }
+        init();
+    })();
+</script>
 </body>
 </html>

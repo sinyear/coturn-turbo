@@ -70,6 +70,11 @@ int turbo_netif_init(struct turbo_netif *tif, int backend_type, int sock_fd) {
         if (tif->backend_type >= TURBO_BACKEND_EPOLL)
             return -1;   /* epoll failed — unrecoverable */
         tif->backend_type++;
+        /* After any non-epoll failure, skip io_uring and go straight to epoll.
+         * io_uring crashes in some container environments despite passing
+         * init validation — skip it to avoid segfaults in the worker. */
+        if (tif->backend_type == TURBO_BACKEND_IO_URING)
+            tif->backend_type = TURBO_BACKEND_EPOLL;
     }
 }
 
