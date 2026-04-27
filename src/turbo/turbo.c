@@ -26,10 +26,6 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
-#ifdef TURBO_IOURING
-#include <liburing.h>
-#include <sys/wait.h>
-#endif
 
 /* ------------------------------------------------------------------ */
 /* Global state                                                         */
@@ -142,38 +138,6 @@ int turbo_init(void) {
 #endif
 
     /* 6. Initialise network backend (auto-fallbacks toward epoll) */
-
-    /* io_uring smoke test: fork a child to try io_uring_queue_init_params.
-     * If it crashes or returns non-zero, skip io_uring entirely and force
-     * epoll. This prevents segfaults in container environments where
-     * io_uring init appears to succeed but later crashes in the worker. */
-#if defined(TURBO_IOURING)
-    if (backend_type == TURBO_BACKEND_IO_URING ||
-        backend_type == TURBO_BACKEND_AF_XDP) {
-        pid_t pid = fork();
-        if (pid == 0) {
-            /* Child: try to create an io_uring */
-            struct io_uring test_ring;
-            struct io_uring_params p = {0};
-            p.cq_entries = 64;
-            int ret = io_uring_queue_init_params(16, &test_ring, &p);
-            if (ret >= 0 && test_ring.ring_fd >= 0)
-                io_uring_queue_exit(&test_ring);
-            _exit(ret < 0 ? 1 : 0);
-        } else if (pid > 0) {
-            int wstatus;
-            waitpid(pid, &wstatus, 0);
-            if (WIFSIGNALED(wstatus) || WEXITSTATUS(wstatus) != 0) {
-                fprintf(stderr, "turbo: io_uring smoke test failed (signal=%d, exit=%d), forcing epoll\n",
-                        WIFSIGNALED(wstatus) ? WTERMSIG(wstatus) : 0,
-                        WEXITSTATUS(wstatus));
-                backend_type = TURBO_BACKEND_EPOLL;
-            }
-        }
-        /* If fork() fails, we just proceed — netif_init will handle fallback */
-    }
-#endif
-
     if (turbo_netif_init(&g_turbo_netif, backend_type, fd) != 0) {
         fprintf(stderr, "turbo: netif init failed\n");
         turbo_ring_destroy(&g_ctrl_ring);
@@ -351,11 +315,12 @@ void turbo_process_packet(struct turbo_netif *tif, struct rtp_packet *pkt) {
     }
 
     if (cls == SHAPER_STUN_QUEUE) {
-        /* STUN packets are processed by the libevent thread via its own
-         * SO_REUSEPORT socket. The worker thread must not interfere with
-         * the coturn state machine, so we simply drop our copy here.
-         * NOTE: g_ctrl_ring is reserved for future use (e.g., drain mode). */
-        tif->ops->free_pkt(tif, pkt);
+        /* Hand off to libevent thread via lock-free ring */
+        if (!turbo_ring_push(&g_ctrl_ring, pkt)) {
+            /* Ring full — drop with accounting */
+            tif->dropped_packets++;
+            tif->ops->free_pkt(tif, pkt);
+        }
         return;
     }
 
@@ -395,10 +360,11 @@ void turbo_process_packet(struct turbo_netif *tif, struct rtp_packet *pkt) {
             tif->ops->free_pkt(tif, pkt);
             return;
         }
-        /* True fastpath miss — the packet is either a new STUN request
-         * (handled by libevent's socket) or raw media from an unknown peer.
-         * Drop our copy to avoid double-processing and memory leak. */
-        tif->ops->free_pkt(tif, pkt);
+        /* True fastpath miss — forward to libevent for full TURN processing */
+        if (!turbo_ring_push(&g_ctrl_ring, pkt)) {
+            tif->dropped_packets++;
+            tif->ops->free_pkt(tif, pkt);
+        }
         return;
     }
 

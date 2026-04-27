@@ -11,8 +11,11 @@
 #include <liburing.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
 #include <errno.h>
 #include <sys/socket.h>
+#include <sys/wait.h>
+#include <sys/poll.h>
 #include <netinet/in.h>
 #include <unistd.h>
 
@@ -83,15 +86,6 @@ static int iouring_init(struct turbo_netif *tif, void *cfg) {
         free(priv); return -1;
     }
 
-    /* Validate ring_fd — io_uring can succeed init but return an invalid fd
-     * in container environments, causing segfaults later in submit_and_wait. */
-    if (priv->ring.ring_fd < 0) {
-        io_uring_queue_exit(&priv->ring);
-        free(priv);
-        tif->priv = NULL;
-        return -1;
-    }
-
     tif->priv = priv;
 
     /* Pre-fill SQ with RECV SQEs */
@@ -153,9 +147,20 @@ static int iouring_recv_pkts(struct turbo_netif *tif,
     struct iouring_priv *priv = tif->priv;
     if (priv->suspended || max == 0) return 0;
 
-    /* Submit and wait for at least 1 CQE (5ms timeout) */
-    struct __kernel_timespec ts = { .tv_sec = 0, .tv_nsec = 5000000 };
-    io_uring_submit_and_wait_timeout(&priv->ring, NULL, 1, &ts, NULL);
+    /* Try to peek for existing CQEs first (no crash) */
+    struct io_uring_cqe *cqe_check;
+    int ret = io_uring_peek_cqe(&priv->ring, &cqe_check);
+    if (ret < 0) {
+        /* No CQE ready — submit and wait via ring fd */
+        io_uring_submit(&priv->ring);
+        int rfd = priv->ring.ring_fd;
+        if (rfd >= 0) {
+            struct pollfd pfd = { .fd = rfd, .events = POLLIN };
+            poll(&pfd, 1, 5);  /* 5ms timeout */
+        }
+        ret = io_uring_peek_cqe(&priv->ring, &cqe_check);
+        if (ret < 0) return 0;
+    }
 
     struct io_uring_cqe *cqe;
     unsigned head;

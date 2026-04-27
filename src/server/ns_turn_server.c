@@ -41,6 +41,7 @@
 #include "ns_turn_utils.h"
 
 #include "apputils.h" // for turn_random, base64_decode
+#include "../apps/relay/mainrelay.h" // for turn_params.turbo_enabled
 
 #include <stdbool.h> // for bool, false
 #include <stdio.h>   // for snprintf
@@ -1229,9 +1230,7 @@ static int handle_turn_allocate(turn_turnserver *server, ts_ur_super_session *ss
         }
       } break;
       default:
-        /* RFC 5389 §17: comprehension-required (0x8000-0xFFFF) → return 420;
-         * comprehension-optional (0x0000-0x7FFF) → silently ignore. */
-        if (attr_type >= 0x8000 && attr_type <= 0xFFFF) {
+        if (attr_type >= 0x0000 && attr_type <= 0x7FFF) {
           unknown_attrs[(*ua_num)++] = nswap16(attr_type);
         }
       };
@@ -1477,9 +1476,11 @@ static int handle_turn_allocate(turn_turnserver *server, ts_ur_super_session *ss
           if (pxor_relayed_addr1 || pxor_relayed_addr2) {
 
 #if defined(TURBO_FEATURES)
-            /* Single-port convergence: override relay port → 3478 */
-            if (pxor_relayed_addr1) addr_set_port(pxor_relayed_addr1, TURBO_RELAY_PORT);
-            if (pxor_relayed_addr2) addr_set_port(pxor_relayed_addr2, TURBO_RELAY_PORT);
+            /* Single-port convergence: override relay port → 3478, only when turbo worker is active */
+            if (turn_params.turbo_enabled) {
+              if (pxor_relayed_addr1) addr_set_port(pxor_relayed_addr1, TURBO_RELAY_PORT);
+              if (pxor_relayed_addr2) addr_set_port(pxor_relayed_addr2, TURBO_RELAY_PORT);
+            }
 #endif
 
             stun_set_allocate_response_str(ioa_network_buffer_data(nbh), &len, tid, pxor_relayed_addr1,
@@ -1497,7 +1498,7 @@ static int handle_turn_allocate(turn_turnserver *server, ts_ur_super_session *ss
             turn_report_allocation_set(&(ss->alloc), lifetime, 0);
 
 #if defined(TURBO_FEATURES)
-            {
+            if (turn_params.turbo_enabled) {
               /* Acquire a collision-free fastpath slot (P6) */
               uint32_t _alloc_id = turbo_alloc_id_acquire();
               if (_alloc_id) {
@@ -1696,9 +1697,7 @@ static int handle_turn_refresh(turn_turnserver *server, ts_ur_super_session *ss,
         }
       } break;
       default:
-        /* RFC 5389 §17: comprehension-required (0x8000-0xFFFF) → return 420;
-         * comprehension-optional (0x0000-0x7FFF) → silently ignore. */
-        if (attr_type >= 0x8000 && attr_type <= 0xFFFF) {
+        if (attr_type >= 0x0000 && attr_type <= 0x7FFF) {
           unknown_attrs[(*ua_num)++] = nswap16(attr_type);
         }
       };
@@ -2395,9 +2394,7 @@ static int handle_turn_connect(turn_turnserver *server, ts_ur_super_session *ss,
         break;
       }
       default:
-        /* RFC 5389 §17: comprehension-required (0x8000-0xFFFF) → return 420;
-         * comprehension-optional (0x0000-0x7FFF) → silently ignore. */
-        if (attr_type >= 0x8000 && attr_type <= 0xFFFF) {
+        if (attr_type >= 0x0000 && attr_type <= 0x7FFF) {
           unknown_attrs[(*ua_num)++] = nswap16(attr_type);
         }
       };
@@ -2479,9 +2476,7 @@ static int handle_turn_connection_bind(turn_turnserver *server, ts_ur_super_sess
         }
       } break;
       default:
-        /* RFC 5389 §17: comprehension-required (0x8000-0xFFFF) → return 420;
-         * comprehension-optional (0x0000-0x7FFF) → silently ignore. */
-        if (attr_type >= 0x8000 && attr_type <= 0xFFFF) {
+        if (attr_type >= 0x0000 && attr_type <= 0x7FFF) {
           unknown_attrs[(*ua_num)++] = nswap16(attr_type);
         }
       };
@@ -2719,9 +2714,7 @@ static int handle_turn_channel_bind(turn_turnserver *server, ts_ur_super_session
         break;
       }
       default:
-        /* RFC 5389 §17: comprehension-required (0x8000-0xFFFF) → return 420;
-         * comprehension-optional (0x0000-0x7FFF) → silently ignore. */
-        if (attr_type >= 0x8000 && attr_type <= 0xFFFF) {
+        if (attr_type >= 0x0000 && attr_type <= 0x7FFF) {
           unknown_attrs[(*ua_num)++] = nswap16(attr_type);
         }
       };
@@ -2942,9 +2935,7 @@ static int handle_turn_binding(turn_turnserver *server, ts_ur_super_session *ss,
       }
       break;
     default:
-      /* RFC 5389 §17: comprehension-required (0x8000-0xFFFF) → return 420;
-       * comprehension-optional (0x0000-0x7FFF) → silently ignore. */
-      if (attr_type >= 0x8000 && attr_type <= 0xFFFF) {
+      if (attr_type >= 0x0000 && attr_type <= 0x7FFF) {
         unknown_attrs[(*ua_num)++] = nswap16(attr_type);
       }
     };
@@ -2970,11 +2961,6 @@ static int handle_turn_binding(turn_turnserver *server, ts_ur_super_session *ss,
 
       *resp_constructed = 1;
 
-      if (server->verbose) {
-        TURN_LOG_FUNC(TURN_LOG_LEVEL_INFO,
-                      "session %018llu: STUN binding response sent (ice=1)\n",
-                      (unsigned long long)(ss->id));
-      }
       if (old_stun && use_reflected_from) {
         stun_attr_add_addr_str(ioa_network_buffer_data(nbh), &len, OLD_STUN_ATTRIBUTE_REFLECTED_FROM,
                                get_remote_addr_from_ioa_socket(ss->client_socket));
@@ -3091,9 +3077,7 @@ static int handle_turn_send(turn_turnserver *server, ts_ur_super_session *ss, in
         }
       } break;
       default:
-        /* RFC 5389 §17: comprehension-required (0x8000-0xFFFF) → return 420;
-         * comprehension-optional (0x0000-0x7FFF) → silently ignore. */
-        if (attr_type >= 0x8000 && attr_type <= 0xFFFF) {
+        if (attr_type >= 0x0000 && attr_type <= 0x7FFF) {
           unknown_attrs[(*ua_num)++] = nswap16(attr_type);
         }
       };
@@ -3227,9 +3211,7 @@ static int handle_turn_create_permission(turn_turnserver *server, ts_ur_super_se
           }
         } break;
         default:
-          /* RFC 5389 §17: comprehension-required (0x8000-0xFFFF) → return 420;
-           * comprehension-optional (0x0000-0x7FFF) → silently ignore. */
-          if (attr_type >= 0x8000 && attr_type <= 0xFFFF) {
+          if (attr_type >= 0x0000 && attr_type <= 0x7FFF) {
             unknown_attrs[(*ua_num)++] = nswap16(attr_type);
           }
         };
@@ -3658,29 +3640,6 @@ static int handle_turn_command(turn_turnserver *server, ts_ur_super_session *ss,
     return -1;
   }
 
-#if defined(TURBO_FEATURES)
-  /* In turbo mode, media packets that land on the client socket via
-   * SO_REUSEPORT should be dropped — the worker thread handles them.
-   * ChannelData: first 2 bytes in [0x4000, 0x7FFF].
-   * Raw RTP: top 2 bits == 00 (looks like STUN but isn't). */
-  {
-    const uint8_t *_d = ioa_network_buffer_data(in_buffer->nbh);
-    const size_t _l = ioa_network_buffer_get_size(in_buffer->nbh);
-    if (_l >= 2) {
-      uint16_t _t = ((uint16_t)_d[0] << 8) | _d[1];
-      if (_t >= 0x4000 && _t <= 0x7FFF) {
-        /* ChannelData — handled by turbo worker */
-        return 0;
-      }
-      /* Non-STUN packet that passes top-2-bits check (raw RTP/RTCP) —
-       * drop silently in turbo mode to avoid spurious 420 errors. */
-      if (!stun_is_command_message_str(_d, _l) && !stun_is_indication_str(_d, _l)) {
-        return 0;
-      }
-    }
-  }
-#endif
-
   uint16_t unknown_attrs[MAX_NUMBER_OF_UNKNOWN_ATTRS] = {0};
   uint16_t ua_num = 0;
   const uint16_t method =
@@ -4023,17 +3982,6 @@ static int handle_turn_command(turn_turnserver *server, ts_ur_super_session *ss,
 
     err_code = 420;
 
-#if defined(TURBO_FEATURES)
-    /* Diagnostic: log unknown attribute types to aid debugging */
-    TURN_LOG_FUNC(TURN_LOG_LEVEL_INFO,
-                  "session %018llu: %s: 420 Unknown Attribute (method=0x%x, ua_num=%u):",
-                  (unsigned long long)(ss->id), __FUNCTION__, (unsigned int)method, ua_num);
-    for (uint16_t _i = 0; _i < ua_num; _i++) {
-      TURN_LOG_FUNC(TURN_LOG_LEVEL_INFO, "  unknown_attr[%u] = 0x%04x", _i,
-                    (unsigned int)nswap16(unknown_attrs[_i]));
-    }
-#endif
-
     size_t len = ioa_network_buffer_get_size(nbh);
     stun_init_error_response_str(method, ioa_network_buffer_data(nbh), &len, err_code, NULL, &tid,
                                  server->include_reason_string);
@@ -4340,28 +4288,14 @@ int shutdown_client_connection(turn_turnserver *server, ts_ur_super_session *ss,
     }
   }
 
+  turn_server_remove_all_from_ur_map_ss(ss, socket_type);
+
 #if defined(TURBO_FEATURES)
-  /* Teardown turbo state BEFORE the session is freed by
-   * turn_server_remove_all_from_ur_map_ss (delete_ur_map_ss calls free(p)).
-   * Copy identifiers to local buffers to avoid any use-after-free race. */
   if (ss->turbo_alloc_id) {
-    char turbo_room_id_copy[64] = {0};
-    char turbo_member_id_copy[64] = {0};
-    if (ss->turbo_room_id[0]) {
-      memcpy(turbo_room_id_copy, ss->turbo_room_id, sizeof(turbo_room_id_copy));
-    }
-    if (ss->turbo_member_id[0]) {
-      memcpy(turbo_member_id_copy, ss->turbo_member_id, sizeof(turbo_member_id_copy));
-    }
-    uint32_t turbo_alloc_id_copy = ss->turbo_alloc_id;
+    turbo_alloc_teardown(ss->turbo_alloc_id, ss->turbo_room_id, ss->turbo_member_id);
     ss->turbo_alloc_id = 0;
-    turbo_alloc_teardown(turbo_alloc_id_copy,
-                         turbo_room_id_copy[0] ? turbo_room_id_copy : NULL,
-                         turbo_member_id_copy[0] ? turbo_member_id_copy : NULL);
   }
 #endif
-
-  turn_server_remove_all_from_ur_map_ss(ss, socket_type);
 
   FUNCEND;
 
