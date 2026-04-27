@@ -100,14 +100,14 @@ write_config() {
 # coturn-turbo test: mode=$mode
 listening-port=3478
 listening-ip=0.0.0.0
-relay-ip=172.17.123.27
-external-ip=122.51.14.87/172.17.123.27
+relay-ip=10.0.2.174
+external-ip=10.0.2.174
 realm=mycoturn
 lt-cred-mech
 user=test:test123
 verbose
 simple-log
-log-file=/home/web/local/var/log/turnserver/turbo.log
+log-file=/var/log/turnserver/turbo.log
 CONF
 
   case "$mode" in
@@ -184,7 +184,7 @@ echo ""
 if [ "$NO_TEST" = false ] && command -v node &>/dev/null; then
   echo "[test] Running WebRTC automated test..."
   TEST_DIR="$PROJECT_DIR/.claude/skills/webrtc-coturn-test-skill"
-  if [ -d "$TEST_DIR" ] && [ -f "$TEST_DIR/regular-diagnostic.js" ]; then
+  if [ -d "$TEST_DIR" ] && [ -f "$TEST_DIR/relay-only-test.js" ]; then
     # Ensure TURN server is running (standard mode: no --turbo)
     sudo cp "$CONF_FILE" "$INSTALL_CONF"
     stop_server
@@ -197,7 +197,7 @@ if [ "$NO_TEST" = false ] && command -v node &>/dev/null; then
     sleep 5
 
     cd "$TEST_DIR"
-    node regular-diagnostic.js 2>&1
+    node relay-only-test.js 2>&1
     TEST_EXIT=$?
 
     # Cleanup

@@ -1476,11 +1476,10 @@ static int handle_turn_allocate(turn_turnserver *server, ts_ur_super_session *ss
           if (pxor_relayed_addr1 || pxor_relayed_addr2) {
 
 #if defined(TURBO_FEATURES)
-            /* Single-port convergence: override relay port → 3478, only when turbo worker is active */
-            if (turn_params.turbo_enabled) {
-              if (pxor_relayed_addr1) addr_set_port(pxor_relayed_addr1, TURBO_RELAY_PORT);
-              if (pxor_relayed_addr2) addr_set_port(pxor_relayed_addr2, TURBO_RELAY_PORT);
-            }
+            /* Single-port convergence disabled: each allocation keeps its own relay port so that
+             * ICE peer-to-peer relay (RFC 8656 §8) can distinguish allocations by port.
+             * The Turbo fastpath still routes on src_addr for single-peer flows and rooms. */
+            (void)0;
 #endif
 
             stun_set_allocate_response_str(ioa_network_buffer_data(nbh), &len, tid, pxor_relayed_addr1,

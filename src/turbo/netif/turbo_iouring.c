@@ -24,6 +24,14 @@
 #define BATCH_MAX          64
 #define PKT_BUF_SIZE     2048
 
+/* Per-packet recvmsg ancillary data (src_addr stored in msg_name) */
+struct iouring_recv_ctx {
+    struct rtp_packet   *pkt;
+    struct iovec         iov;
+    struct msghdr        msg;
+    struct sockaddr_in6  src;
+};
+
 struct iouring_priv {
     struct io_uring ring;
     int             sock_fd;
@@ -35,7 +43,8 @@ struct iouring_priv {
 
 static struct rtp_packet *iouring_alloc_pkt(struct turbo_netif *tif) {
     (void)tif;
-    struct rtp_packet *p = calloc(1, sizeof(*p) + PKT_BUF_SIZE);
+    /* Extra space for iouring_recv_ctx appended after the data buffer */
+    struct rtp_packet *p = calloc(1, sizeof(*p) + PKT_BUF_SIZE + sizeof(struct iouring_recv_ctx));
     if (!p) return NULL;
     p->data = (uint8_t *)p + sizeof(*p);
     atomic_store(&p->refcount, 1);
@@ -61,15 +70,25 @@ static struct rtp_packet *iouring_clone_pkt(struct turbo_netif *tif,
     return dst;
 }
 
-/* Submit one RECV SQE for a pre-allocated packet */
+/* Submit one RECVMSG SQE to capture src_addr alongside packet data */
 static void submit_recv_sqe(struct iouring_priv *priv, struct rtp_packet *pkt) {
     struct io_uring_sqe *sqe = io_uring_get_sqe(&priv->ring);
     if (!sqe) return;
 
-    /* We use recvmsg-style via io_uring_prep_recv */
-    io_uring_prep_recv(sqe, priv->sock_fd, pkt->data, PKT_BUF_SIZE, 0);
-    /* store packet pointer so we can recover it from the CQE */
-    io_uring_sqe_set_data(sqe, pkt);
+    /* Embed recv context immediately after packet payload buffer */
+    struct iouring_recv_ctx *ctx = (struct iouring_recv_ctx *)(pkt->data + PKT_BUF_SIZE);
+    ctx->pkt            = pkt;
+    ctx->iov.iov_base   = pkt->data;
+    ctx->iov.iov_len    = PKT_BUF_SIZE;
+    memset(&ctx->msg, 0, sizeof(ctx->msg));
+    ctx->msg.msg_name    = &ctx->src;
+    ctx->msg.msg_namelen = sizeof(ctx->src);
+    ctx->msg.msg_iov     = &ctx->iov;
+    ctx->msg.msg_iovlen  = 1;
+
+    io_uring_prep_recvmsg(sqe, priv->sock_fd, &ctx->msg, 0);
+    /* Use ctx as user_data so we can recover both pkt and src_addr */
+    io_uring_sqe_set_data(sqe, ctx);
     priv->inflight_rx++;
 }
 
@@ -172,20 +191,42 @@ static int iouring_recv_pkts(struct turbo_netif *tif,
         if (n >= max) break;
         total_consumed++;
 
-        struct rtp_packet *p = io_uring_cqe_get_data(cqe);
-        if (p == NULL) {
-            /* Send completion (user_data=NULL, fire-and-forget).
-             * io_uring still generates a CQE; consume it silently.
-             * Do NOT decrement inflight_rx — sends were never counted there. */
+        struct iouring_recv_ctx *ctx = io_uring_cqe_get_data(cqe);
+        /* Distinguish send vs recv context via LSB tag:
+         *   LSB=0 → recv (iouring_recv_ctx *)
+         *   LSB=1 → send (iouring_send_ctx *), pointer tagged at SQE submission
+         *   NULL  → legacy fire-and-forget (unused now but kept for safety) */
+        uintptr_t raw = (uintptr_t)ctx;
+        if (raw == 0) {
+            continue;
+        }
+        if (raw & 1UL) {
+            /* Send completion: free the send context */
+            struct iouring_send_ctx *sctx = (struct iouring_send_ctx *)(raw & ~1UL);
+            free(sctx);
             continue;
         }
 
         /* Recv completion: count it and update inflight_rx either way */
         recv_consumed++;
         priv->inflight_rx--;
+        struct rtp_packet *p = ctx->pkt;
 
         if (cqe->res > 0) {
             p->len = (uint16_t)cqe->res;
+            /* Copy captured source address into packet */
+            if (ctx->msg.msg_namelen >= sizeof(struct sockaddr_in6))
+                p->src_addr = ctx->src;
+            else if (ctx->msg.msg_namelen >= sizeof(struct sockaddr_in)) {
+                /* IPv4: convert to IPv4-mapped IPv6 */
+                const struct sockaddr_in *s4 = (const struct sockaddr_in *)&ctx->src;
+                memset(&p->src_addr, 0, sizeof(p->src_addr));
+                p->src_addr.sin6_family = AF_INET6;
+                p->src_addr.sin6_port   = s4->sin_port;
+                p->src_addr.sin6_addr.s6_addr[10] = 0xff;
+                p->src_addr.sin6_addr.s6_addr[11] = 0xff;
+                memcpy(&p->src_addr.sin6_addr.s6_addr[12], &s4->sin_addr, 4);
+            }
             pkts[n++] = p;
         } else {
             /* Error or zero-length: free packet but still advance the CQE.
@@ -214,16 +255,37 @@ static int iouring_recv_pkts(struct turbo_netif *tif,
     return n;
 }
 
+/* Per-send msghdr — embedded in a small heap alloc for fire-and-forget lifetime */
+struct iouring_send_ctx {
+    struct msghdr  msg;
+    struct iovec   iov;
+    uint8_t        data[2048];  /* copy of packet payload */
+};
+
 static int iouring_send_burst(struct turbo_netif *tif,
                                struct rtp_packet **pkts, uint16_t count) {
     struct iouring_priv *priv = tif->priv;
     int submitted = 0;
 
     for (int i = 0; i < count; i++) {
+        if (pkts[i]->len > 2048) continue;
+        struct iouring_send_ctx *sctx = malloc(sizeof(*sctx));
+        if (!sctx) break;
+
+        memcpy(sctx->data, pkts[i]->data, pkts[i]->len);
+        sctx->iov.iov_base = sctx->data;
+        sctx->iov.iov_len  = pkts[i]->len;
+        memset(&sctx->msg, 0, sizeof(sctx->msg));
+        sctx->msg.msg_name    = &pkts[i]->dst_addr;
+        sctx->msg.msg_namelen = sizeof(struct sockaddr_in6);
+        sctx->msg.msg_iov     = &sctx->iov;
+        sctx->msg.msg_iovlen  = 1;
+
         struct io_uring_sqe *sqe = io_uring_get_sqe(&priv->ring);
-        if (!sqe) break;
-        io_uring_prep_send(sqe, priv->sock_fd, pkts[i]->data, pkts[i]->len, 0);
-        io_uring_sqe_set_data(sqe, NULL);  /* fire-and-forget */
+        if (!sqe) { free(sctx); break; }
+        io_uring_prep_sendmsg(sqe, priv->sock_fd, &sctx->msg, 0);
+        /* Tag LSB=1 to distinguish from recv ctx in CQE handler */
+        io_uring_sqe_set_data(sqe, (void *)((uintptr_t)sctx | 1UL));
         submitted++;
     }
 
