@@ -1,0 +1,66 @@
+services:
+
+  # ── Development container ────────────────────────────────────────────────────
+  # This is the service devcontainer.json attaches to. It contains the full
+  # build toolchain (gcc/clang-18, autotools, liburing, libbpf, libxdp, etc.)
+  # matching the Ubuntu 24.04 Codespace environment.
+  dev:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    volumes:
+      # Mount the repo root; "cached" improves performance on macOS hosts
+      - ../..:/workspaces:cached
+      # Persist bash history across container rebuilds
+      - devcontainer-bashhistory:/commandhistory
+    # Keep the container alive while VS Code is connected
+    command: /bin/sh -c "while sleep 3600; do :; done"
+    environment:
+      CTURBO_DEBUG: "0"
+      # Point coturn redis URL to the companion service when running tests
+      TURBO_REDIS_URL: "redis://redis:6379"
+    # NET_ADMIN + NET_RAW are required for AF_XDP / raw socket paths in turbo.
+    # io_uring mode works without these caps.
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    # Raise socket buffer limits so io_uring/AF_XDP benchmarks are not
+    # constrained by kernel defaults.
+    sysctls:
+      net.core.rmem_max: 16777216
+      net.core.wmem_max: 16777216
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - coturn-dev
+
+  # ── Redis ────────────────────────────────────────────────────────────────────
+  # coturn supports Redis for credential storage and channel/allocation
+  # persistence (--redis-userdb, --redis-statsdb).  This service mirrors what
+  # a production deployment would use and lets you exercise the Redis path
+  # locally without any extra setup.
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    command: >
+      redis-server
+      --maxmemory 128mb
+      --maxmemory-policy allkeys-lru
+      --save ""
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - coturn-dev
+
+networks:
+  coturn-dev:
+    driver: bridge
+
+volumes:
+  devcontainer-bashhistory:

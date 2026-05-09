@@ -1,0 +1,80 @@
+{
+  "name": "coturn-turbo",
+  "dockerComposeFile": "docker-compose.yaml",
+  "service": "dev",
+  "workspaceFolder": "/workspaces/coturn-turbo",
+
+  // Install all npm deps for the WebRTC test skill, then re-run autoreconf
+  // in case the checkout arrived without a generated ./configure.
+  "postCreateCommand": "cd /workspaces/coturn-turbo && (test -f configure || autoreconf -fi) && cd .claude/skills/webrtc-coturn-test-skill && npm install 2>/dev/null || true",
+
+  "remoteUser": "codespace",
+
+  // TURN/STUN (3478 UDP/TCP) and Turbo Admin API (8080 TCP)
+  "forwardPorts": [3478, 8080],
+  "portsAttributes": {
+    "3478": { "label": "TURN/STUN", "onAutoForward": "silent" },
+    "8080": { "label": "Turbo Admin API", "onAutoForward": "notify" }
+  },
+
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        // C/C++ core
+        "ms-vscode.cpptools-extension-pack",
+        "llvm-vs-code-extensions.vscode-clangd",
+        "ms-vscode.makefile-tools",
+        // CMake (project has both autotools + CMakeLists.txt)
+        "ms-vscode.cmake-tools",
+        "twxs.cmake",
+        // Git
+        "eamodio.gitlens",
+        "mhutchie.git-graph",
+        // Shell / scripts
+        "timonwong.shellcheck",
+        "foxundermoon.shell-format",
+        // Node / JS (webrtc test skill)
+        "dbaeumer.vscode-eslint",
+        // Misc quality-of-life
+        "streetsidesoftware.code-spell-checker",
+        "EditorConfig.EditorConfig",
+        "ms-vscode.hexeditor"
+      ],
+      "settings": {
+        // Prefer clangd for IntelliSense; disable the built-in engine to avoid conflicts
+        "C_Cpp.intelliSenseEngine": "disabled",
+        "clangd.arguments": [
+          "--background-index",
+          "--clang-tidy",
+          "--compile-commands-dir=${workspaceFolder}/build",
+          "--header-insertion=never"
+        ],
+        // clang-format as default formatter for C/C++
+        "editor.formatOnSave": true,
+        "[c]": {
+          "editor.defaultFormatter": "llvm-vs-code-extensions.vscode-clangd"
+        },
+        "[cpp]": {
+          "editor.defaultFormatter": "llvm-vs-code-extensions.vscode-clangd"
+        },
+        // C standard used across the project
+        "C_Cpp.default.cStandard": "c11",
+        "C_Cpp.default.cppStandard": "c++17",
+        "C_Cpp.default.compilerPath": "/usr/bin/gcc",
+        // CMake
+        "cmake.configureOnOpen": false,
+        "cmake.buildDirectory": "${workspaceFolder}/build",
+        // Exclude noisy directories from file watcher
+        "files.watcherExclude": {
+          "**/build/**": true,
+          "**/.git/objects/**": true,
+          "**/node_modules/**": true
+        },
+        "files.exclude": {
+          "**/build": false
+        },
+        "terminal.integrated.defaultProfile.linux": "bash"
+      }
+    }
+  }
+}
